@@ -5,7 +5,8 @@ Everything worth knowing about a new version, written for the people who use the
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries land
 under `## [Unreleased]` as they are merged; cutting a release moves them under a version
-heading with its date. See [Releasing](README.md#releasing) for the procedure.
+heading with its date. See [Build and Release](docs/architecture.md#build-and-release)
+for the procedure.
 
 ## [Unreleased]
 

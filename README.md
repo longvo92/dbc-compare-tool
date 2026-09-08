@@ -189,26 +189,6 @@ flowchart TD
 
 The desktop app and the CLI share the same engine, and that engine has no UI dependency. Outside the package: `scripts/build.py` produces the distributables, `scripts/release_check.py` gates a release, `examples/` holds the sample baselines, and `tests/` mirrors the layers above.
 
-### Releasing
-
-Two moves, on purpose.
-
-1. A normal pull request bumps the version in `src/dbc_compare_tool/__init__.py` and `pyproject.toml`, and moves everything under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) into a new `## [X.Y.Z] - <date>` section. Check it before pushing:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\release_check.py 0.5.0
-```
-
-2. Once that is merged, trigger the release workflow against `main`. It builds the `.exe` and the zipapp on Windows, runs the suite and the CLI smoke test, and starts both artifacts to catch a bundle that is missing a module:
-
-```bash
-gh workflow run release.yml -f version=0.5.0
-```
-
-That is a rehearsal: it verifies and uploads the artifacts without creating anything permanent. Add `-f publish=true` to tag `v0.5.0` and create the GitHub release, whose notes are the changelog section for that version. The workflow never edits the repository, and refuses a version that disagrees with the merged files, that still has entries under `## [Unreleased]`, or that was already tagged.
-
----
-
 ## Documentation
 
 - [User Guide](resources/help/user_guide.md) — step-by-step usage, also in the app's Help menu
