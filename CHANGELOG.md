@@ -10,6 +10,10 @@ for the procedure.
 
 ## [Unreleased]
 
+### Fixed
+
+- Improve comparison accuracy and manual pairing validation.
+
 ## [0.4.0] - 2026-09-06
 
 ### Changed

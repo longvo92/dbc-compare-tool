@@ -1,6 +1,8 @@
 """Regression tests for robustness fixes: frame-key collisions, parse-error
 resilience, case-insensitive discovery, and encoding fallback."""
 
+from __future__ import annotations
+
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +17,15 @@ _GOOD_DBC = """VERSION ""
 BO_ 100 Node_Status: 8 ECU
  SG_ Counter : 0|8@1+ (1,0) [0|255] "" ECM
 """
+
+_NODE_ORDER_DBC = '''VERSION ""
+NS_ :
+BS_:
+BU_: ECU A B
+BO_ 100 Status: 8 ECU
+ SG_ Value : 0|8@1+ (1,0) [0|255] "" {receivers}
+BO_TX_BU_ 100 : {senders};
+'''
 
 
 def _make_signal(name: str = "Counter") -> Signal:
@@ -130,6 +141,28 @@ class TestEncodingFallback(unittest.TestCase):
             path.write_text("not a dbc {{{", encoding="utf-8")
             with self.assertRaises(DbcParseError):
                 parse_dbc(path)
+
+
+class TestNodeOrderNormalization(unittest.TestCase):
+    def test_reordered_nodes_do_not_create_property_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old_folder = root / "old"
+            new_folder = root / "new"
+            old_folder.mkdir()
+            new_folder.mkdir()
+            (old_folder / "network.dbc").write_text(
+                _NODE_ORDER_DBC.format(receivers="A,B", senders="A,B"),
+                encoding="utf-8",
+            )
+            (new_folder / "network.dbc").write_text(
+                _NODE_ORDER_DBC.format(receivers="B,A", senders="B,A"),
+                encoding="utf-8",
+            )
+
+            result = DbcComparator().compare_folders(old_folder, new_folder)
+
+            self.assertEqual(result.summary()["Total Changes"], 0)
 
 
 if __name__ == "__main__":

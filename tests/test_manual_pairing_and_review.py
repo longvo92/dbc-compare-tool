@@ -1,5 +1,8 @@
 """Tests for manual file pairing and user rejection of signal renames."""
 
+from __future__ import annotations
+
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -9,6 +12,12 @@ from dbc_compare_tool.core.models import Change, ComparisonResult
 _EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 _OLD_FOLDER = _EXAMPLES / "old"
 _NEW_FOLDER = _EXAMPLES / "new"
+
+_MINIMAL_DBC = '''VERSION ""
+
+BO_ 100 Status: 8 ECU
+ SG_ Counter : 0|8@1+ (1,0) [0|255] "" ECM
+'''
 
 
 class TestCompareManual(unittest.TestCase):
@@ -41,6 +50,24 @@ class TestCompareManual(unittest.TestCase):
             DbcComparator().compare_manual(
                 _OLD_FOLDER, _NEW_FOLDER, {"NoSuchFile.dbc": "Bus_A.dbc"}
             )
+
+    def test_duplicate_new_pair_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old_folder = root / "old"
+            new_folder = root / "new"
+            old_folder.mkdir()
+            new_folder.mkdir()
+            for name in ("first.dbc", "second.dbc"):
+                (old_folder / name).write_text(_MINIMAL_DBC, encoding="utf-8")
+            (new_folder / "current.dbc").write_text(_MINIMAL_DBC, encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "paired more than once"):
+                DbcComparator().compare_manual(
+                    old_folder,
+                    new_folder,
+                    {"first.dbc": "current.dbc", "second.dbc": "current.dbc"},
+                )
 
     def test_progress_callback_called(self):
         messages: list[str] = []

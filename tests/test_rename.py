@@ -80,22 +80,29 @@ class TestSignalRenameDetectorEventMode(unittest.TestCase):
 
 
 class TestAmbiguityAdjustment(unittest.TestCase):
-    def test_two_old_rival_for_one_new_are_flagged(self):
+    def test_marginal_two_old_rivals_for_one_new_are_rejected(self):
         detector = SignalRenameDetector()
         old1 = _make_signal("A", start_bit=0, length=8)
         old2 = _make_signal("B", start_bit=0, length=8)  # same layout as old1
         new = _make_signal("X", start_bit=0, length=8)
         matches = detector.match([old1, old2], [new])
-        self.assertEqual(len(matches), 1)  # greedy still picks one
-        self.assertTrue(any("Ambiguous" in r for r in matches[0].reasons))
+        self.assertEqual(matches, [])
 
-    def test_one_old_rival_for_two_new_are_flagged(self):
+    def test_marginal_one_old_rival_for_two_new_are_rejected(self):
         # Regression: old-side ambiguity used to go undetected.
         detector = SignalRenameDetector()
         old = _make_signal("A", start_bit=0, length=8)
         new1 = _make_signal("X", start_bit=0, length=8)
         new2 = _make_signal("Y", start_bit=0, length=8)
         matches = detector.match([old], [new1, new2])
+        self.assertEqual(matches, [])
+
+    def test_strong_ambiguous_candidate_remains_flagged(self):
+        detector = SignalRenameDetector()
+        old1 = _make_signal("VehicleSpeed", start_bit=0, length=8)
+        old2 = _make_signal("VehicleSpeeds", start_bit=0, length=8)
+        new = _make_signal("VehicleSpeedNew", start_bit=0, length=8)
+        matches = detector.match([old1, old2], [new])
         self.assertEqual(len(matches), 1)
         self.assertTrue(any("Ambiguous" in r for r in matches[0].reasons))
 
@@ -111,7 +118,7 @@ class TestAmbiguityAdjustment(unittest.TestCase):
             RenameMatch(old1, new, base, "Low", ()),
             RenameMatch(old2, new, base, "Low", ()),
         ]
-        adjusted = detector._adjust_for_ambiguity(candidates, [old1, old2], [new])
+        adjusted = detector._adjust_for_ambiguity(candidates)
         for match in adjusted:
             self.assertLessEqual(match.confidence, base)
             self.assertTrue(any("Ambiguous" in r for r in match.reasons))
