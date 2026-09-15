@@ -8,7 +8,7 @@ This project is a local Windows desktop application for automotive engineers com
 
 1. Parser
    - Reads `.dbc` files through cantools.
-   - Extracts messages, signals, multiplexing metadata, extended-frame state, value tables (`VAL_`), comments (`CM_`), the signal init value (`GenSigStartValue`), and common message cycle-time attributes.
+   - Extracts messages, signals, multiplexing metadata, extended-frame state, value tables (`VAL_`), comments (`CM_`), and common message cycle-time attributes.
    - Keeps parsed output in small dataclasses.
 
 2. Comparison Engine
@@ -217,16 +217,17 @@ A message counts as event-like (`EventMessageDetector.is_event_like`) when **all
 
 ### Matching procedure and confidence
 
-All old×new pairs are scored, those at or above the threshold become candidates, then candidates are
-taken in descending score order with each old and each new item used at most once (greedy one-to-one).
+All old×new pairs are scored and those at or above the threshold become candidates. Ambiguity is then
+penalised symmetrically: when *n* items on one side compete for the same item on the other — several
+old items for one new item, or several new items for one old item — each competing candidate loses
+`0.15 × (n − 1)` and gains an "Ambiguous" reason. A candidate must still meet the detector threshold
+after this penalty; marginal ambiguous pairs are therefore reported as Removed + Added instead of an
+unsupported rename.
 
-Before that, ambiguity is penalised, and symmetrically: when *n* items on one side compete for the
-same item on the other — several old items for one new item, or several new items for one old item —
-each competing candidate loses `0.15 × (n − 1)` and gains an "Ambiguous" reason. Two details follow —
-the penalty is applied *after* the threshold filter, so a penalised pair can end up scoring below its
-own detector threshold and still be matched; and the reduced score is held at the 0.70 Medium floor
-but never raised above the candidate's own unadjusted score, which matters for event-like signals
-whose 0.65 threshold sits below that floor.
+The reduced score is held at the 0.70 Medium floor but never raised above the candidate's own
+unadjusted score. This matters for event-like signals, whose 0.65 threshold sits below that floor.
+Remaining candidates are taken in descending score order with each old and each new item used at most
+once (greedy one-to-one).
 
 Confidence levels shown in the UI and report: **High** ≥ 0.90, **Medium** ≥ 0.70, otherwise **Low**.
 
@@ -276,8 +277,8 @@ with the suite still green, which a release build would then have shipped.
 - The rename thresholds are a deliberate trade-off: at 0.60, `MessageRenameDetector` favours missing
   a CAN-ID-changed rename (reported as Removed + Added) over inventing a wrong one. Field use has not
   shown a reason to move it, but a project with heavy simultaneous ID-and-name churn may want it lower.
-- Rename review in the UI is the intended safety net for the above: a detected rename can always be
-  rejected before export, but a *missed* rename has no equivalent "merge these two" affordance.
+- Rename review is available only after a complete manual pairing. Automatic pairing keeps detected
+  renames without a review step, and a *missed* rename has no "merge these two" affordance.
 - There is exactly one rename change type, `Renamed`, graded by confidence level. An earlier
   `Possible Rename` type for ambiguous matches was removed once the confidence level made it
   redundant; do not reintroduce a second change type for uncertainty, since it splits the same

@@ -44,10 +44,9 @@ class GreedyRenameDetector(Generic[T]):
         """Categorize confidence as High, Medium, or Low."""
         if confidence >= self.high_confidence_threshold:
             return "High"
-        elif confidence >= self.medium_confidence_threshold:
+        if confidence >= self.medium_confidence_threshold:
             return "Medium"
-        else:
-            return "Low"
+        return "Low"
 
     def match(self, old_items: Iterable[T], new_items: Iterable[T]) -> list[RenameMatch[T]]:
         candidates: list[RenameMatch[T]] = []
@@ -61,9 +60,8 @@ class GreedyRenameDetector(Generic[T]):
                     confidence_level = self.get_confidence_level(confidence)
                     candidates.append(RenameMatch(old=old, new=new, confidence=confidence, confidence_level=confidence_level, reasons=reasons))
 
-        # Detect ambiguous matches (multiple old signals matching one new signal)
-        # and reduce confidence accordingly
-        candidates = self._adjust_for_ambiguity(candidates, old_list, new_list)
+        candidates = self._adjust_for_ambiguity(candidates)
+        candidates = [candidate for candidate in candidates if candidate.confidence >= self.threshold]
 
         candidates.sort(key=lambda item: item.confidence, reverse=True)
         matches: list[RenameMatch[T]] = []
@@ -79,9 +77,7 @@ class GreedyRenameDetector(Generic[T]):
             used_new.add(new_id)
         return matches
 
-    def _adjust_for_ambiguity(
-        self, candidates: list[RenameMatch[T]], old_items: list[T], new_items: list[T]
-    ) -> list[RenameMatch[T]]:
+    def _adjust_for_ambiguity(self, candidates: list[RenameMatch[T]]) -> list[RenameMatch[T]]:
         """Reduce confidence for ambiguous matches where one item has rival matches.
 
         Ambiguity is symmetric: several old items competing for one new item is
@@ -94,7 +90,7 @@ class GreedyRenameDetector(Generic[T]):
             new_match_counts[id(candidate.new)] = new_match_counts.get(id(candidate.new), 0) + 1
             old_match_counts[id(candidate.old)] = old_match_counts.get(id(candidate.old), 0) + 1
 
-        adjusted_candidates = []
+        adjusted_candidates: list[RenameMatch[T]] = []
         for candidate in candidates:
             rivals = max(new_match_counts[id(candidate.new)], old_match_counts[id(candidate.old)])
             if rivals > 1:
@@ -104,7 +100,7 @@ class GreedyRenameDetector(Generic[T]):
                 # whose threshold sits below the Medium floor (event-like
                 # signals at 0.65), the floor alone could otherwise raise it.
                 reduced_confidence = min(reduced_confidence, candidate.confidence)
-                new_reasons = list(candidate.reasons) + [f"Ambiguous: {rivals} rival matches for this signal"]
+                new_reasons = list(candidate.reasons) + [f"Ambiguous: {rivals} rival matches for this item"]
                 adjusted_candidates.append(RenameMatch(
                     old=candidate.old,
                     new=candidate.new,
@@ -135,11 +131,7 @@ class EventMessageDetector:
         if short_signal_count / len(message.signals) < cls.EVENT_SIGNAL_PERCENTAGE:
             return False
 
-        # Check for property repetition (many signals with identical properties)
-        if cls._has_highly_repetitive_properties(message):
-            return True
-
-        return False
+        return cls._has_highly_repetitive_properties(message)
 
     @classmethod
     def _has_highly_repetitive_properties(cls, message: Message) -> bool:
@@ -208,9 +200,8 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
     event_threshold = 0.65  # Lower threshold for event-like messages
 
     def __init__(self, is_event_like: bool = False) -> None:
-        """
-        Initialize SignalRenameDetector.
-        
+        """Initialize the detector for a normal or event-like message.
+
         Args:
             is_event_like: Whether the parent message is event-like, which changes scoring.
         """
@@ -286,9 +277,6 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
         reasons_list.append("Event Matrix message: name similarity is primary criterion")
 
         return min(score, 1.0), tuple(reasons_list)
-
-
-
 def _name_similarity(left: str, right: str) -> float:
     return SequenceMatcher(None, left.lower(), right.lower()).ratio()
 

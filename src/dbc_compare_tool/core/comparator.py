@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import warnings
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -79,16 +80,13 @@ class DbcComparator:
                     if progress_callback:
                         progress_callback(f"[{i}/{total}] Comparing: {pair.relative_path}")
                     self.compare_databases(pair.relative_path, old_db, new_db, result)
-                    result.file_pairs.append(FilePairSummary(
-                        dbc_file=pair.relative_path,
+                    result.file_pairs.append(_file_pair_summary(
+                        label=pair.relative_path,
                         status="Matched",
                         old_path=pair.relative_path,
                         new_path=pair.relative_path,
-                        pairing_confidence=None,
-                        message_count_old=len(old_db.messages),
-                        message_count_new=len(new_db.messages),
-                        signal_count_old=_count_signals(old_db),
-                        signal_count_new=_count_signals(new_db),
+                        old_db=old_db,
+                        new_db=new_db,
                     ))
                 elif pair.old_path:
                     old_only.append(DatabaseCandidate(pair.relative_path, parse_dbc(pair.old_path)))
@@ -97,41 +95,34 @@ class DbcComparator:
             except DbcParseError as exc:
                 if progress_callback:
                     progress_callback(f"[{i}/{total}] Parse error, skipped: {pair.relative_path} ({exc})")
-                result.file_pairs.append(FilePairSummary(
-                    dbc_file=pair.relative_path,
+                result.file_pairs.append(_file_pair_summary(
+                    label=pair.relative_path,
                     status="Parse Error",
                     old_path=pair.relative_path if pair.old_path else "",
                     new_path=pair.relative_path if pair.new_path else "",
-                    pairing_confidence=None,
-                    message_count_old=0,
-                    message_count_new=0,
-                    signal_count_old=0,
-                    signal_count_new=0,
                 ))
 
         file_matches = match_renamed_databases(old_only, new_only)
-        matched_old = {id(match.old) for match in file_matches}
-        matched_new = {id(match.new) for match in file_matches}
+        matched_old = {match.old.relative_path for match in file_matches}
+        matched_new = {match.new.relative_path for match in file_matches}
 
         for match in file_matches:
             label = _format_file_pair_label(match.old.relative_path, match.new.relative_path)
             if progress_callback:
                 progress_callback(f"Comparing renamed DBC: {label}")
             self.compare_databases(label, match.old.database, match.new.database, result)
-            result.file_pairs.append(FilePairSummary(
-                dbc_file=label,
+            result.file_pairs.append(_file_pair_summary(
+                label=label,
                 status="DBC Renamed",
                 old_path=match.old.relative_path,
                 new_path=match.new.relative_path,
                 pairing_confidence=match.confidence,
-                message_count_old=len(match.old.database.messages),
-                message_count_new=len(match.new.database.messages),
-                signal_count_old=_count_signals(match.old.database),
-                signal_count_new=_count_signals(match.new.database),
+                old_db=match.old.database,
+                new_db=match.new.database,
             ))
 
         for candidate in old_only:
-            if id(candidate) not in matched_old:
+            if candidate.relative_path not in matched_old:
                 if progress_callback:
                     progress_callback(f"DBC removed: {candidate.relative_path}")
                 self.compare_databases(
@@ -140,20 +131,16 @@ class DbcComparator:
                     DbcDatabase(path=Path(candidate.relative_path)),
                     result,
                 )
-                result.file_pairs.append(FilePairSummary(
-                    dbc_file=candidate.relative_path,
+                result.file_pairs.append(_file_pair_summary(
+                    label=candidate.relative_path,
                     status="DBC Removed",
                     old_path=candidate.relative_path,
                     new_path="",
-                    pairing_confidence=None,
-                    message_count_old=len(candidate.database.messages),
-                    message_count_new=0,
-                    signal_count_old=_count_signals(candidate.database),
-                    signal_count_new=0,
+                    old_db=candidate.database,
                 ))
 
         for candidate in new_only:
-            if id(candidate) not in matched_new:
+            if candidate.relative_path not in matched_new:
                 if progress_callback:
                     progress_callback(f"DBC added: {candidate.relative_path}")
                 self.compare_databases(
@@ -162,16 +149,12 @@ class DbcComparator:
                     candidate.database,
                     result,
                 )
-                result.file_pairs.append(FilePairSummary(
-                    dbc_file=candidate.relative_path,
+                result.file_pairs.append(_file_pair_summary(
+                    label=candidate.relative_path,
                     status="DBC Added",
                     old_path="",
                     new_path=candidate.relative_path,
-                    pairing_confidence=None,
-                    message_count_old=0,
-                    message_count_new=len(candidate.database.messages),
-                    signal_count_old=0,
-                    signal_count_new=_count_signals(candidate.database),
+                    new_db=candidate.database,
                 ))
 
         return result
@@ -187,7 +170,8 @@ class DbcComparator:
 
         pair_map maps an old-file relative path to a new-file relative path,
         or None to force the old file to be reported as removed. New files not
-        referenced by any pair are reported as added.
+        referenced by any pair are reported as added. Each new file may be
+        paired with at most one old file.
         """
         result = ComparisonResult()
         old_files = collect_dbc_files(old_folder)
@@ -198,7 +182,12 @@ class DbcComparator:
         if missing:
             raise FileNotFoundError(f"Paired DBC files not found on disk: {', '.join(missing)}")
 
-        paired_new = {rel for rel in pair_map.values() if rel}
+        paired_new_list = [rel for rel in pair_map.values() if rel]
+        duplicate_new = sorted(rel for rel, count in Counter(paired_new_list).items() if count > 1)
+        if duplicate_new:
+            raise ValueError(f"New DBC files paired more than once: {', '.join(duplicate_new)}")
+
+        paired_new = set(paired_new_list)
         unpaired_new = [rel for rel in sorted(new_files) if rel not in paired_new]
         total = len(old_files) + len(unpaired_new)
         step = 0
@@ -214,31 +203,23 @@ class DbcComparator:
                 except DbcParseError as exc:
                     if progress_callback:
                         progress_callback(f"[{step}/{total}] Parse error, skipped: {label} ({exc})")
-                    result.file_pairs.append(FilePairSummary(
-                        dbc_file=label,
+                    result.file_pairs.append(_file_pair_summary(
+                        label=label,
                         status="Parse Error",
                         old_path=old_rel,
                         new_path=new_rel,
-                        pairing_confidence=None,
-                        message_count_old=0,
-                        message_count_new=0,
-                        signal_count_old=0,
-                        signal_count_new=0,
                     ))
                     continue
                 if progress_callback:
                     progress_callback(f"[{step}/{total}] Comparing (manual pair): {label}")
                 self.compare_databases(label, old_db, new_db, result)
-                result.file_pairs.append(FilePairSummary(
-                    dbc_file=label,
+                result.file_pairs.append(_file_pair_summary(
+                    label=label,
                     status="Matched" if old_rel == new_rel else "Manually Paired",
                     old_path=old_rel,
                     new_path=new_rel,
-                    pairing_confidence=None,
-                    message_count_old=len(old_db.messages),
-                    message_count_new=len(new_db.messages),
-                    signal_count_old=_count_signals(old_db),
-                    signal_count_new=_count_signals(new_db),
+                    old_db=old_db,
+                    new_db=new_db,
                 ))
             else:
                 try:
@@ -246,31 +227,22 @@ class DbcComparator:
                 except DbcParseError as exc:
                     if progress_callback:
                         progress_callback(f"[{step}/{total}] Parse error, skipped: {old_rel} ({exc})")
-                    result.file_pairs.append(FilePairSummary(
-                        dbc_file=old_rel,
+                    result.file_pairs.append(_file_pair_summary(
+                        label=old_rel,
                         status="Parse Error",
                         old_path=old_rel,
                         new_path="",
-                        pairing_confidence=None,
-                        message_count_old=0,
-                        message_count_new=0,
-                        signal_count_old=0,
-                        signal_count_new=0,
                     ))
                     continue
                 if progress_callback:
                     progress_callback(f"[{step}/{total}] DBC removed: {old_rel}")
                 self.compare_databases(old_rel, old_db, DbcDatabase(path=Path(old_rel)), result)
-                result.file_pairs.append(FilePairSummary(
-                    dbc_file=old_rel,
+                result.file_pairs.append(_file_pair_summary(
+                    label=old_rel,
                     status="DBC Removed",
                     old_path=old_rel,
                     new_path="",
-                    pairing_confidence=None,
-                    message_count_old=len(old_db.messages),
-                    message_count_new=0,
-                    signal_count_old=_count_signals(old_db),
-                    signal_count_new=0,
+                    old_db=old_db,
                 ))
 
         for new_rel in unpaired_new:
@@ -280,31 +252,22 @@ class DbcComparator:
             except DbcParseError as exc:
                 if progress_callback:
                     progress_callback(f"[{step}/{total}] Parse error, skipped: {new_rel} ({exc})")
-                result.file_pairs.append(FilePairSummary(
-                    dbc_file=new_rel,
+                result.file_pairs.append(_file_pair_summary(
+                    label=new_rel,
                     status="Parse Error",
                     old_path="",
                     new_path=new_rel,
-                    pairing_confidence=None,
-                    message_count_old=0,
-                    message_count_new=0,
-                    signal_count_old=0,
-                    signal_count_new=0,
                 ))
                 continue
             if progress_callback:
                 progress_callback(f"[{step}/{total}] DBC added: {new_rel}")
             self.compare_databases(new_rel, DbcDatabase(path=Path(new_rel)), new_db, result)
-            result.file_pairs.append(FilePairSummary(
-                dbc_file=new_rel,
+            result.file_pairs.append(_file_pair_summary(
+                label=new_rel,
                 status="DBC Added",
                 old_path="",
                 new_path=new_rel,
-                pairing_confidence=None,
-                message_count_old=0,
-                message_count_new=len(new_db.messages),
-                signal_count_old=0,
-                signal_count_new=_count_signals(new_db),
+                new_db=new_db,
             ))
 
         return result
@@ -324,6 +287,8 @@ class DbcComparator:
         for frame_id in sorted(set(old_by_id) & set(new_by_id)):
             old_message = old_by_id[frame_id]
             new_message = new_by_id[frame_id]
+            old_properties = old_message.comparable_properties()
+            new_properties = new_message.comparable_properties()
             if old_message.name != new_message.name:
                 result.message_changes.append(
                     Change(
@@ -333,27 +298,15 @@ class DbcComparator:
                         new_name=new_message.name,
                         confidence=1.0,
                         description=_with_match_reasons(
-                            _renamed_item_description(
-                                "Message Name",
-                                old_message.name,
-                                new_message.name,
-                                old_message.comparable_properties(),
-                                new_message.comparable_properties(),
-                            ),
+                            _changed_properties(old_properties, new_properties),
                             ("Identical CAN ID",),
                         ),
                         can_id=new_message.can_id,
-                        property_diffs=_get_property_diffs(
-                            old_message.comparable_properties(),
-                            new_message.comparable_properties(),
-                        ),
+                        property_diffs=_get_property_diffs(old_properties, new_properties),
                     )
                 )
             else:
-                description = _changed_properties(
-                    old_message.comparable_properties(),
-                    new_message.comparable_properties(),
-                )
+                description = _changed_properties(old_properties, new_properties)
                 if description:
                     result.message_changes.append(
                         Change(
@@ -364,10 +317,7 @@ class DbcComparator:
                             confidence=None,
                             description=description,
                             can_id=new_message.can_id,
-                            property_diffs=_get_property_diffs(
-                                old_message.comparable_properties(),
-                                new_message.comparable_properties(),
-                            ),
+                            property_diffs=_get_property_diffs(old_properties, new_properties),
                         )
                     )
             self._compare_signals(dbc_file, old_message, new_message, result)
@@ -386,6 +336,8 @@ class DbcComparator:
         for match in rename_matches:
             old_message = match.old
             new_message = match.new
+            old_properties = old_message.comparable_properties()
+            new_properties = new_message.comparable_properties()
             result.message_changes.append(
                 Change(
                     dbc_file=dbc_file,
@@ -395,20 +347,11 @@ class DbcComparator:
                     confidence=match.confidence,
                     confidence_level=match.confidence_level,
                     description=_with_match_reasons(
-                        _renamed_item_description(
-                            "Message Name",
-                            old_message.name,
-                            new_message.name,
-                            old_message.comparable_properties(),
-                            new_message.comparable_properties(),
-                        ),
+                        _changed_properties(old_properties, new_properties),
                         match.reasons,
                     ),
                     can_id=new_message.can_id,
-                    property_diffs=_get_property_diffs(
-                        old_message.comparable_properties(),
-                        new_message.comparable_properties(),
-                    ),
+                    property_diffs=_get_property_diffs(old_properties, new_properties),
                 )
             )
             self._compare_signals(dbc_file, old_message, new_message, result)
@@ -448,16 +391,15 @@ class DbcComparator:
         for name in common_names:
             old_signal = old_message.signals[name]
             new_signal = new_message.signals[name]
-            description = _changed_properties(old_signal.comparable_properties(), new_signal.comparable_properties())
+            old_properties = old_signal.comparable_properties()
+            new_properties = new_signal.comparable_properties()
+            description = _changed_properties(old_properties, new_properties)
             if description:
                 result.signal_changes.append(
                     Change(
                         dbc_file, "Modified", name, name, None, description,
                         parent_message=parent_name,
-                        property_diffs=_get_property_diffs(
-                            old_signal.comparable_properties(),
-                            new_signal.comparable_properties(),
-                        ),
+                        property_diffs=_get_property_diffs(old_properties, new_properties),
                     )
                 )
 
@@ -472,6 +414,8 @@ class DbcComparator:
         for match in rename_matches:
             old_signal = match.old
             new_signal = match.new
+            old_properties = old_signal.comparable_properties()
+            new_properties = new_signal.comparable_properties()
             result.signal_changes.append(
                 Change(
                     dbc_file=dbc_file,
@@ -482,19 +426,10 @@ class DbcComparator:
                     confidence=match.confidence,
                     confidence_level=match.confidence_level,
                     description=_with_match_reasons(
-                        _renamed_item_description(
-                            "Signal Name",
-                            old_signal.name,
-                            new_signal.name,
-                            old_signal.comparable_properties(),
-                            new_signal.comparable_properties(),
-                        ),
+                        _changed_properties(old_properties, new_properties),
                         match.reasons,
                     ),
-                    property_diffs=_get_property_diffs(
-                        old_signal.comparable_properties(),
-                        new_signal.comparable_properties(),
-                    ),
+                    property_diffs=_get_property_diffs(old_properties, new_properties),
                 )
             )
             matched_old.add(old_signal.name)
@@ -627,17 +562,6 @@ def _changed_properties(old: dict[str, object], new: dict[str, object]) -> str:
     return "\n".join(changes)
 
 
-def _renamed_item_description(
-    name_label: str,
-    old_name: str,
-    new_name: str,
-    old_properties: dict[str, object],
-    new_properties: dict[str, object],
-) -> str:
-    # Name change is already captured in old_name/new_name columns; only list property changes.
-    return _changed_properties(old_properties, new_properties)
-
-
 def _with_match_reasons(description: str, reasons: tuple[str, ...]) -> str:
     if not reasons:
         return description
@@ -718,16 +642,16 @@ def match_renamed_databases(
 
     candidates.sort(key=lambda item: item.confidence, reverse=True)
     matches: list[DatabaseMatch] = []
-    used_old: set[int] = set()
-    used_new: set[int] = set()
+    used_old: set[str] = set()
+    used_new: set[str] = set()
     for candidate in candidates:
-        old_id = id(candidate.old)
-        new_id = id(candidate.new)
-        if old_id in used_old or new_id in used_new:
+        old_path = candidate.old.relative_path
+        new_path = candidate.new.relative_path
+        if old_path in used_old or new_path in used_new:
             continue
         matches.append(candidate)
-        used_old.add(old_id)
-        used_new.add(new_id)
+        used_old.add(old_path)
+        used_new.add(new_path)
     return matches
 
 
@@ -799,3 +723,26 @@ def _format_file_pair_label(old_relative_path: str, new_relative_path: str) -> s
 
 def _count_signals(db: DbcDatabase) -> int:
     return sum(len(msg.signals) for msg in db.messages.values())
+
+
+def _file_pair_summary(
+    *,
+    label: str,
+    status: str,
+    old_path: str,
+    new_path: str,
+    old_db: DbcDatabase | None = None,
+    new_db: DbcDatabase | None = None,
+    pairing_confidence: float | None = None,
+) -> FilePairSummary:
+    return FilePairSummary(
+        dbc_file=label,
+        status=status,
+        old_path=old_path,
+        new_path=new_path,
+        pairing_confidence=pairing_confidence,
+        message_count_old=len(old_db.messages) if old_db is not None else 0,
+        message_count_new=len(new_db.messages) if new_db is not None else 0,
+        signal_count_old=_count_signals(old_db) if old_db is not None else 0,
+        signal_count_new=_count_signals(new_db) if new_db is not None else 0,
+    )

@@ -38,9 +38,10 @@ def parse_dbc(path: Path) -> DbcDatabase:
 
 
 def _load_cantools_database(path: Path) -> Any:
+    text = _read_dbc_text(path)
     try:
         return cantools.database.load_string(
-            _read_dbc_text(path),
+            text,
             database_format="dbc",
             strict=False,
             sort_signals=None,
@@ -49,7 +50,6 @@ def _load_cantools_database(path: Path) -> Any:
         if "GenMsgCycleTime" not in str(exc):
             raise
 
-        text = _read_dbc_text(path)
         if 'BA_DEF_ BO_ "GenMsgCycleTime"' not in text:
             text = LEGACY_CYCLE_TIME_DEFINITION + text
         return cantools.database.load_string(
@@ -100,7 +100,7 @@ def _map_signal(cantools_signal: Any) -> Signal:
         minimum=cantools_signal.minimum,
         maximum=cantools_signal.maximum,
         unit=cantools_signal.unit or "",
-        receivers=tuple(cantools_signal.receivers or ()),
+        receivers=tuple(sorted(cantools_signal.receivers or ())),
         is_multiplexer=bool(cantools_signal.is_multiplexer),
         multiplexer_ids=tuple(cantools_signal.multiplexer_ids or ()),
         multiplexer_signal=cantools_signal.multiplexer_signal,
@@ -126,7 +126,7 @@ def _map_value_type(cantools_signal: Any) -> str:
 
 
 def _format_senders(senders: list[str] | tuple[str, ...]) -> str:
-    return ",".join(senders) if senders else UNDEFINED_NODE
+    return ",".join(sorted(senders)) if senders else UNDEFINED_NODE
 
 
 def _normalize_comment(comment: Any) -> str:
