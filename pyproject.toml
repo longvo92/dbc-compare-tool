@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dbc-compare-tool"
-version = "0.4.1"
+version = "0.4.2"
 description = "Compare CAN DBC baseline folders and generate an engineering-grade Excel change report"
 readme = "README.md"
 requires-python = ">=3.9"

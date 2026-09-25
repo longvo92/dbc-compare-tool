@@ -151,10 +151,12 @@ The `-e .` step is required: the package lives under `src/`, so `python -m dbc_c
 **CLI:**
 
 ```powershell
-.\.venv\Scripts\python.exe -m dbc_compare_tool.cli --old path\to\old --new path\to\new --out report.xlsx
+.\.venv\Scripts\python.exe -m dbc_compare_tool.cli --old "path\to\old baseline" --new "path\to\new baseline"
 ```
 
-All three arguments are required and `--out` must end in `.xlsx`. Exit codes: `0` success, `1` parse or write failure, `2` bad arguments or missing folder.
+`--old` and `--new` are required. Folder paths may contain spaces. `--out` is optional; when omitted, the report is written beside the new baseline folder as `compared_<new-folder-name>.xlsx`. An explicit `--out` path must end in `.xlsx`. The GUI applies the same automatic output rule when **Report Path** is left empty.
+
+Exit codes: `0` success, `1` parse or write failure, `2` bad arguments or missing folder.
 
 `run_gui.bat` and `run_cli.bat` at the repository root do the same, using `.venv` in the repo.
 
