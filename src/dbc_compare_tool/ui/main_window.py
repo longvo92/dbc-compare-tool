@@ -37,7 +37,7 @@ from dbc_compare_tool import __version__
 from dbc_compare_tool.core.comparator import DbcComparator, filter_result, reject_signal_renames
 from dbc_compare_tool.core.discovery import collect_dbc_files
 from dbc_compare_tool.core.models import Change, ComparisonResult
-from dbc_compare_tool.report.excel import write_excel_report
+from dbc_compare_tool.report.excel import default_report_path, write_excel_report
 from dbc_compare_tool.ui.widgets import DropLineEdit, NoWheelComboBox
 
 
@@ -499,7 +499,10 @@ class MainWindow(QMainWindow):
 
         self.old_input = DropLineEdit()
         self.new_input = DropLineEdit()
-        self.output_input = QLineEdit(str(Path.cwd() / "dbc_compare_report.xlsx"))
+        self.output_input = QLineEdit()
+        self.output_input.setPlaceholderText(
+            "Automatic: beside New folder as compared_<folder>.xlsx"
+        )
         self.run_button = QPushButton("Run Compare")
         self.manual_pair_button = QPushButton("Manual Pairing…")
         self.open_button = QPushButton("Open Report")
@@ -579,7 +582,7 @@ class MainWindow(QMainWindow):
         new_button.clicked.connect(lambda: self._choose_folder(self.new_input))
         form.addWidget(new_button, 1, 2)
 
-        form.addWidget(QLabel("Report Path"), 2, 0)
+        form.addWidget(QLabel("Report Path (optional)"), 2, 0)
         form.addWidget(self.output_input, 2, 1)
         output_button = QPushButton("Browse")
         output_button.clicked.connect(self._choose_report)
@@ -650,6 +653,7 @@ class MainWindow(QMainWindow):
         self.open_button.clicked.connect(self._open_report)
         self.old_input.textChanged.connect(self._invalidate_saved_pairing)
         self.new_input.textChanged.connect(self._invalidate_saved_pairing)
+        self.new_input.textChanged.connect(self._update_output_hint)
 
     def _current_folder_inputs(self) -> tuple[str, str]:
         return (self.old_input.text().strip(), self.new_input.text().strip())
@@ -703,13 +707,28 @@ class MainWindow(QMainWindow):
             target.setText(str(Path(folder)))
 
     def _choose_report(self) -> None:
+        suggested_path = self.output_input.text().strip()
+        if not suggested_path:
+            new_text = self.new_input.text().strip()
+            if new_text:
+                suggested_path = str(default_report_path(Path(new_text)))
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Excel Report", self.output_input.text(), "Excel (*.xlsx)"
+            self, "Save Excel Report", suggested_path, "Excel (*.xlsx)"
         )
         if path:
             if not path.lower().endswith(".xlsx"):
                 path += ".xlsx"
             self.output_input.setText(str(Path(path)))
+
+    def _update_output_hint(self) -> None:
+        new_text = self.new_input.text().strip()
+        if new_text:
+            automatic = default_report_path(Path(new_text))
+            self.output_input.setPlaceholderText(f"Automatic: {automatic}")
+        else:
+            self.output_input.setPlaceholderText(
+                "Automatic: beside New folder as compared_<folder>.xlsx"
+            )
 
     def _selected_change_types(self) -> set[str]:
         types: set[str] = set()
@@ -744,13 +763,14 @@ class MainWindow(QMainWindow):
 
     def _start_compare(self, pair_map: dict[str, str | None] | None, review_renames: bool) -> None:
         old_text, new_text = self._current_folder_inputs()
-        output_path = Path(self.output_input.text().strip())
         # Guard empty text explicitly: Path("") is ".", which is_dir() accepts.
         if not old_text or not new_text or not Path(old_text).is_dir() or not Path(new_text).is_dir():
             QMessageBox.warning(self, "Invalid Input", "Select valid old and new baseline folders.")
             return
         old_folder = Path(old_text)
         new_folder = Path(new_text)
+        output_text = self.output_input.text().strip()
+        output_path = Path(output_text) if output_text else default_report_path(new_folder)
         if output_path.suffix.lower() != ".xlsx":
             QMessageBox.warning(self, "Invalid Output", "Report path must end with .xlsx.")
             return
@@ -813,13 +833,19 @@ class MainWindow(QMainWindow):
             self.old_input.setText(str(Path(str(val))))
         if val := self._settings.value("last_new_folder"):
             self.new_input.setText(str(Path(str(val))))
-        if val := self._settings.value("last_report_path"):
+        report_path_is_explicit = self._settings.value(
+            "report_path_is_explicit", False, type=bool
+        )
+        if report_path_is_explicit and (val := self._settings.value("last_report_path")):
             self.output_input.setText(str(Path(str(val))))
 
     def _save_paths(self) -> None:
         self._settings.setValue("last_old_folder", self.old_input.text())
         self._settings.setValue("last_new_folder", self.new_input.text())
         self._settings.setValue("last_report_path", self.output_input.text())
+        self._settings.setValue(
+            "report_path_is_explicit", bool(self.output_input.text().strip())
+        )
 
     def _completed(self, report_path: Path, summary: dict) -> None:
         self.progress.setRange(0, 1)

@@ -70,6 +70,11 @@ _STATUS_FILL: dict[str, str] = {
 _BORDER = BORDER
 
 
+def default_report_path(new_folder: Path) -> Path:
+    """Place an automatically named report beside the new baseline folder."""
+    return new_folder.parent / f"compared_{new_folder.name}.xlsx"
+
+
 def write_excel_report(result: ComparisonResult, output_path: Path) -> Path:
     workbook = Workbook()
     summary_sheet = workbook.active

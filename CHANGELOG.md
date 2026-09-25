@@ -10,6 +10,12 @@ for the procedure.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-25
+
+### Changed
+
+- Improve folder path handling and automatically create reports beside the new baseline when no output path is provided.
+
 ## [0.4.1] - 2026-09-15
 
 ### Fixed
