@@ -3,16 +3,15 @@ from __future__ import annotations
 import warnings
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
-from difflib import SequenceMatcher
+from dataclasses import replace
 from pathlib import Path
 
 from dbc_compare_tool.core.discovery import collect_dbc_files, discover_dbc_pairs
-from dbc_compare_tool.core.models import Change, ComparisonResult, DbcDatabase, FilePairSummary, Message, jaccard
+from dbc_compare_tool.core.models import Change, ComparisonResult, DbcDatabase, FilePairSummary, Message
+from dbc_compare_tool.core.pairing import DatabaseCandidate, match_renamed_databases
 from dbc_compare_tool.core.parser import DbcParseError, parse_dbc
 from dbc_compare_tool.core.rename import EventMessageDetector, MessageRenameDetector, SignalRenameDetector
 
-FILE_RENAME_THRESHOLD = 0.55
 LAYOUT_PROPERTIES = ("Start Bit", "Length", "Byte Order")
 PROPERTY_ORDER = (
     "Start Bit",
@@ -44,28 +43,17 @@ PROPERTY_LABELS = {
 }
 
 
-@dataclass(frozen=True)
-class DatabaseCandidate:
-    relative_path: str
-    database: DbcDatabase
-
-
-@dataclass(frozen=True)
-class DatabaseMatch:
-    old: DatabaseCandidate
-    new: DatabaseCandidate
-    confidence: float
-    reasons: tuple[str, ...]
-
-
 class DbcComparator:
+    def __init__(self, include_unchanged: bool = False) -> None:
+        self.include_unchanged = include_unchanged
+
     def compare_folders(
         self,
         old_folder: Path,
         new_folder: Path,
         progress_callback: Callable[[str], None] | None = None,
     ) -> ComparisonResult:
-        result = ComparisonResult()
+        result = ComparisonResult(include_unchanged=self.include_unchanged)
         old_only: list[DatabaseCandidate] = []
         new_only: list[DatabaseCandidate] = []
 
@@ -109,7 +97,7 @@ class DbcComparator:
         for match in file_matches:
             label = _format_file_pair_label(match.old.relative_path, match.new.relative_path)
             if progress_callback:
-                progress_callback(f"Comparing renamed DBC: {label}")
+                progress_callback(f"Comparing renamed DBC: {label} ({match.confidence:.2f}; {'; '.join(match.reasons)})")
             self.compare_databases(label, match.old.database, match.new.database, result)
             result.file_pairs.append(_file_pair_summary(
                 label=label,
@@ -117,6 +105,7 @@ class DbcComparator:
                 old_path=match.old.relative_path,
                 new_path=match.new.relative_path,
                 pairing_confidence=match.confidence,
+                pairing_reasons=match.reasons,
                 old_db=match.old.database,
                 new_db=match.new.database,
             ))
@@ -173,7 +162,7 @@ class DbcComparator:
         referenced by any pair are reported as added. Each new file may be
         paired with at most one old file.
         """
-        result = ComparisonResult()
+        result = ComparisonResult(include_unchanged=self.include_unchanged)
         old_files = collect_dbc_files(old_folder)
         new_files = collect_dbc_files(new_folder)
 
@@ -280,6 +269,8 @@ class DbcComparator:
         result: ComparisonResult | None = None,
     ) -> ComparisonResult:
         result = result or ComparisonResult()
+        result.include_unchanged = result.include_unchanged or self.include_unchanged
+        message_start = len(result.message_changes)
 
         old_by_id = _messages_by_frame_id(old_db)
         new_by_id = _messages_by_frame_id(new_db)
@@ -307,15 +298,15 @@ class DbcComparator:
                 )
             else:
                 description = _changed_properties(old_properties, new_properties)
-                if description:
+                if description or self.include_unchanged:
                     result.message_changes.append(
                         Change(
                             dbc_file=dbc_file,
-                            change_type="Modified",
+                            change_type="Modified" if description else "Unchanged",
                             old_name=old_message.name,
                             new_name=new_message.name,
                             confidence=None,
-                            description=description,
+                            description=description or "Message properties unchanged",
                             can_id=new_message.can_id,
                             property_diffs=_get_property_diffs(old_properties, new_properties),
                         )
@@ -374,6 +365,13 @@ class DbcComparator:
             )
             self._append_all_signals(dbc_file, message, "Added", result)
 
+        for index in range(message_start, len(result.message_changes)):
+            change = result.message_changes[index]
+            result.message_changes[index] = replace(
+                change,
+                old_message=old_db.messages.get(change.old_name),
+                new_message=new_db.messages.get(change.new_name),
+            )
         return result
 
     def _compare_signals(
@@ -384,6 +382,7 @@ class DbcComparator:
         result: ComparisonResult,
     ) -> None:
         parent_name = new_message.name
+        signal_start = len(result.signal_changes)
         common_names = sorted(set(old_message.signals) & set(new_message.signals))
         matched_old = set(common_names)
         matched_new = set(common_names)
@@ -394,10 +393,11 @@ class DbcComparator:
             old_properties = old_signal.comparable_properties()
             new_properties = new_signal.comparable_properties()
             description = _changed_properties(old_properties, new_properties)
-            if description:
+            if description or self.include_unchanged:
                 result.signal_changes.append(
                     Change(
-                        dbc_file, "Modified", name, name, None, description,
+                        dbc_file, "Modified" if description else "Unchanged", name, name,
+                        None, description or "Signal properties unchanged",
                         parent_message=parent_name,
                         property_diffs=_get_property_diffs(old_properties, new_properties),
                     )
@@ -460,6 +460,17 @@ class DbcComparator:
                 Change(dbc_file, "Added", "", signal.name, None, description, parent_message=parent_name)
             )
 
+        for index in range(signal_start, len(result.signal_changes)):
+            change = result.signal_changes[index]
+            result.signal_changes[index] = replace(
+                change,
+                can_id=new_message.can_id if change.new_name else old_message.can_id,
+                old_message=old_message,
+                new_message=new_message,
+                old_signal=old_message.signals.get(change.old_name),
+                new_signal=new_message.signals.get(change.new_name),
+            )
+
     def _append_all_signals(self, dbc_file: str, message: Message, change_type: str, result: ComparisonResult) -> None:
         for signal in message.signals.values():
             result.signal_changes.append(
@@ -471,68 +482,30 @@ class DbcComparator:
                     new_name=signal.name if change_type == "Added" else "",
                     confidence=None,
                     description=f"Signal {change_type.lower()} with parent message",
+                    can_id=message.can_id,
+                    old_message=message if change_type == "Removed" else None,
+                    new_message=message if change_type == "Added" else None,
+                    old_signal=signal if change_type == "Removed" else None,
+                    new_signal=signal if change_type == "Added" else None,
                 )
             )
-
-
-def reject_signal_renames(result: ComparisonResult, rejected_indices: set[int]) -> ComparisonResult:
-    """Convert user-rejected signal renames into Removed + Added changes.
-
-    rejected_indices refer to the order of appearance of "Renamed" entries in
-    result.signal_changes (0-based).
-    """
-    if not rejected_indices:
-        return result
-
-    signal_changes: list[Change] = []
-    rename_index = 0
-    for change in result.signal_changes:
-        if change.change_type != "Renamed":
-            signal_changes.append(change)
-            continue
-        if rename_index in rejected_indices:
-            signal_changes.append(Change(
-                dbc_file=change.dbc_file,
-                change_type="Removed",
-                old_name=change.old_name,
-                new_name="",
-                confidence=None,
-                description="Signal removed (rename rejected by user)",
-                parent_message=change.parent_message,
-            ))
-            signal_changes.append(Change(
-                dbc_file=change.dbc_file,
-                change_type="Added",
-                old_name="",
-                new_name=change.new_name,
-                confidence=None,
-                description="Signal added (rename rejected by user)",
-                parent_message=change.parent_message,
-            ))
-        else:
-            signal_changes.append(change)
-        rename_index += 1
-
-    return ComparisonResult(
-        message_changes=result.message_changes,
-        signal_changes=signal_changes,
-        file_pairs=result.file_pairs,
-    )
 
 
 def filter_result(result: ComparisonResult, selected_types: set[str]) -> ComparisonResult:
     """Keep only the change types the user asked for.
 
     An empty selection means "no filter" and returns the result unchanged.
+    Include Unchanged bypasses type filtering to preserve the complete inventory.
     File pairs are always preserved so the DBC Overview sheet still lists
     every compared file, including the ones whose changes were filtered out.
     """
-    if not selected_types:
+    if not selected_types or result.include_unchanged:
         return result
     return ComparisonResult(
         message_changes=[c for c in result.message_changes if c.change_type in selected_types],
         signal_changes=[c for c in result.signal_changes if c.change_type in selected_types],
         file_pairs=result.file_pairs,
+        include_unchanged=result.include_unchanged,
     )
 
 
@@ -628,93 +601,6 @@ def _frame_key(message: Message) -> tuple[int, bool]:
     return (message.can_id, message.is_extended_frame)
 
 
-def match_renamed_databases(
-    old_candidates: list[DatabaseCandidate],
-    new_candidates: list[DatabaseCandidate],
-) -> list[DatabaseMatch]:
-    """Pair DBC files whose relative paths differ, by CAN ID and structure overlap."""
-    candidates: list[DatabaseMatch] = []
-    for old in old_candidates:
-        for new in new_candidates:
-            confidence, reasons = _score_database_pair(old, new)
-            if confidence >= FILE_RENAME_THRESHOLD:
-                candidates.append(DatabaseMatch(old, new, confidence, reasons))
-
-    candidates.sort(key=lambda item: item.confidence, reverse=True)
-    matches: list[DatabaseMatch] = []
-    used_old: set[str] = set()
-    used_new: set[str] = set()
-    for candidate in candidates:
-        old_path = candidate.old.relative_path
-        new_path = candidate.new.relative_path
-        if old_path in used_old or new_path in used_new:
-            continue
-        matches.append(candidate)
-        used_old.add(old_path)
-        used_new.add(new_path)
-    return matches
-
-
-def _score_database_pair(old: DatabaseCandidate, new: DatabaseCandidate) -> tuple[float, tuple[str, ...]]:
-    old_messages = old.database.messages
-    new_messages = new.database.messages
-    if not old_messages or not new_messages:
-        return 0.0, ()
-
-    old_by_id = {_frame_key(message): message for message in old_messages.values()}
-    new_by_id = {_frame_key(message): message for message in new_messages.values()}
-    common_ids = set(old_by_id) & set(new_by_id)
-    if not common_ids:
-        return 0.0, ()
-
-    reasons: list[str] = []
-    score = 0.0
-
-    id_overlap = len(common_ids) / max(len(old_by_id), len(new_by_id))
-    score += 0.55 * id_overlap
-    reasons.append(f"DBC CAN ID overlap {id_overlap:.0%}")
-
-    name_overlap = len(set(old_messages) & set(new_messages)) / max(len(old_messages), len(new_messages))
-    if name_overlap:
-        score += 0.15 * name_overlap
-        reasons.append(f"Message names overlap {name_overlap:.0%}")
-
-    structure_score = _common_message_structure_score(old_by_id, new_by_id, common_ids)
-    if structure_score:
-        score += 0.25 * structure_score
-        reasons.append(f"Common CAN ID structures {structure_score:.0%} matched")
-
-    file_name_score = SequenceMatcher(None, old.relative_path.lower(), new.relative_path.lower()).ratio()
-    score += 0.05 * file_name_score
-    if file_name_score >= 0.5:
-        reasons.append("DBC file names are similar")
-
-    return min(score, 1.0), tuple(reasons)
-
-
-def _common_message_structure_score(
-    old_by_id: dict[tuple[int, bool], Message],
-    new_by_id: dict[tuple[int, bool], Message],
-    common_ids: set[tuple[int, bool]],
-) -> float:
-    message_scores: list[float] = []
-    for frame_key in common_ids:
-        old = old_by_id[frame_key]
-        new = new_by_id[frame_key]
-        score = 0.0
-        if old.dlc == new.dlc:
-            score += 0.20
-        if old.transmitter == new.transmitter:
-            score += 0.15
-        if old.cycle_time_ms == new.cycle_time_ms:
-            score += 0.10
-        if len(old.signals) == len(new.signals):
-            score += 0.15
-        score += 0.40 * jaccard(old.signal_layout(), new.signal_layout())
-        message_scores.append(score)
-    return sum(message_scores) / len(message_scores)
-
-
 def _format_file_pair_label(old_relative_path: str, new_relative_path: str) -> str:
     if old_relative_path == new_relative_path:
         return old_relative_path
@@ -734,6 +620,7 @@ def _file_pair_summary(
     old_db: DbcDatabase | None = None,
     new_db: DbcDatabase | None = None,
     pairing_confidence: float | None = None,
+    pairing_reasons: tuple[str, ...] = (),
 ) -> FilePairSummary:
     return FilePairSummary(
         dbc_file=label,
@@ -741,6 +628,7 @@ def _file_pair_summary(
         old_path=old_path,
         new_path=new_path,
         pairing_confidence=pairing_confidence,
+        pairing_reasons=pairing_reasons,
         message_count_old=len(old_db.messages) if old_db is not None else 0,
         message_count_new=len(new_db.messages) if new_db is not None else 0,
         signal_count_old=_count_signals(old_db) if old_db is not None else 0,

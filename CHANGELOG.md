@@ -10,6 +10,19 @@ for the procedure.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-05
+
+### Added
+
+- Filterable OLD/NEW ECU Tx/Rx and technical context in Excel reports.
+- Include Unchanged mode in CLI and GUI to export all compared messages and signals without inflating change counts.
+
+### Changed
+
+- Pair renamed DBCs across the entire unmatched inventory using filename/folder keywords and content; shared keywords can match files with completely different messages. Show pairing reasons in DBC Overview.
+- Manual pairing now selects DBC files only and exports directly, without the signal-rename review dialog.
+- Organize the GUI into Baselines and Report sections, with a lighter execution log, clearer run status, and actions that stay visible when scrolling.
+
 ## [0.4.2] - 2026-09-25
 
 ### Changed
