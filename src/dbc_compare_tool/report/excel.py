@@ -7,7 +7,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from dbc_compare_tool.core.models import Change, ComparisonResult, FilePairSummary
+from dbc_compare_tool.core.models import Change, ComparisonResult, FilePairSummary, Message, Signal
 from dbc_compare_tool.report._style import BORDER, HEADER_BG, HEADER_FG
 
 
@@ -32,6 +32,7 @@ _CHANGE_ROW_FILL: dict[str, str] = {
     "Removed":  "FCE4D6",   # light salmon
     "Modified": "FFF2CC",   # light yellow
     "Renamed":  "DDEBF7",   # light blue
+    "Unchanged": "F2F2F2",  # light gray
 }
 
 # Confidence level cell highlight
@@ -68,6 +69,26 @@ _STATUS_FILL: dict[str, str] = {
 }
 
 _BORDER = BORDER
+
+# Append context columns to preserve the existing report columns and their order.
+_CONTEXT_HEADERS = [
+    f"{label} ({side})"
+    for label in ("CAN ID", "ECU Node Tx", "ECU Node Rx")
+    for side in ("Old", "New")
+]
+_MESSAGE_FIELDS = (
+    ("DLC", "dlc"), ("Extended Frame", "is_extended_frame"),
+    ("Cycle Time (ms)", "cycle_time_ms"), ("Signal Count", "signals"),
+    ("Message Description", "comment"),
+)
+_SIGNAL_FIELDS = (
+    ("Start Bit", "start_bit"), ("Length", "length"), ("Byte Order", "byte_order"),
+    ("Value Type", "value_type"), ("Signed", "is_signed"), ("Factor", "factor"),
+    ("Offset", "offset"), ("Minimum", "minimum"), ("Maximum", "maximum"),
+    ("Unit", "unit"), ("Multiplexer", "is_multiplexer"),
+    ("Multiplexer IDs", "multiplexer_ids"), ("Multiplexer Signal", "multiplexer_signal"),
+    ("Value Descriptions", "value_descriptions"), ("Signal Description", "comment"),
+)
 
 
 def default_report_path(new_folder: Path) -> Path:
@@ -116,6 +137,8 @@ def _write_summary(sheet, result: ComparisonResult) -> None:
     for metric in summary:
         if metric not in SUMMARY_ORDER:
             sheet.append([metric, summary[metric]])
+    sheet.append(["Report Mode", "Full impact review" if result.include_unchanged else "Changes only"])
+    sheet.append(["Parse Errors (skipped DBCs)", sum(fp.status == "Parse Error" for fp in result.file_pairs)])
 
 
 def _write_overview(sheet, file_pairs: list[FilePairSummary]) -> None:
@@ -154,6 +177,8 @@ def _write_message_details(sheet, changes: list[Change]) -> None:
         "Confidence Score",
         "Confidence Level",
         "Change Description",
+        *_CONTEXT_HEADERS,
+        *_field_headers(_MESSAGE_FIELDS),
     ])
     for change in changes:
         sheet.append([
@@ -165,6 +190,8 @@ def _write_message_details(sheet, changes: list[Change]) -> None:
             _fmt_confidence(change.confidence),
             change.confidence_level,
             change.description,
+            *_context_values(change),
+            *_field_values(change.old_message, change.new_message, _MESSAGE_FIELDS),
         ])
 
 
@@ -178,6 +205,11 @@ def _write_signal_details(sheet, changes: list[Change]) -> None:
         "Confidence Score",
         "Confidence Level",
         "Changed Properties",
+        "Parent Message (Old)",
+        "Parent Message (New)",
+        *_CONTEXT_HEADERS,
+        *_field_headers(_MESSAGE_FIELDS),
+        *_field_headers(_SIGNAL_FIELDS),
     ])
     for change in changes:
         sheet.append([
@@ -189,6 +221,11 @@ def _write_signal_details(sheet, changes: list[Change]) -> None:
             _fmt_confidence(change.confidence),
             change.confidence_level,
             change.description,
+            change.old_message.name if change.old_message else "",
+            change.new_message.name if change.new_message else "",
+            *_context_values(change, signal=True),
+            *_field_values(change.old_message, change.new_message, _MESSAGE_FIELDS),
+            *_field_values(change.old_signal, change.new_signal, _SIGNAL_FIELDS),
         ])
 
 
@@ -207,6 +244,7 @@ def _write_property_diff(
         "Property",
         "Old Value",
         "New Value",
+        *_CONTEXT_HEADERS,
     ])
     for change in message_changes:
         for prop, old_val, new_val in change.property_diffs:
@@ -220,6 +258,7 @@ def _write_property_diff(
                 prop,
                 old_val,
                 new_val,
+                *_context_values(change),
             ])
     for change in signal_changes:
         for prop, old_val, new_val in change.property_diffs:
@@ -233,6 +272,7 @@ def _write_property_diff(
                 prop,
                 old_val,
                 new_val,
+                *_context_values(change, signal=True),
             ])
 
 
@@ -262,7 +302,8 @@ def _format_summary(sheet) -> None:
     sheet.row_dimensions[3].height = 22
 
     # Rows 4+ — metric data
-    for row_idx, metric in enumerate(SUMMARY_ORDER, start=4):
+    for row_idx in range(4, sheet.max_row + 1):
+        metric = sheet.cell(row_idx, 1).value
         row = sheet[row_idx]
         bg = _SUMMARY_METRIC_FILL.get(metric, "FFFFFF")
         fill = PatternFill("solid", fgColor=bg)
@@ -275,8 +316,8 @@ def _format_summary(sheet) -> None:
                 cell.font = Font(bold=True, size=11)
         sheet.row_dimensions[row_idx].height = 18
 
-    sheet.column_dimensions["A"].width = 26
-    sheet.column_dimensions["B"].width = 10
+    sheet.column_dimensions["A"].width = 30
+    sheet.column_dimensions["B"].width = 24
     sheet.freeze_panes = "A4"
 
 
@@ -394,6 +435,54 @@ def _format_property_diff_sheet(sheet) -> None:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _field_headers(fields: tuple[tuple[str, str], ...]) -> list[str]:
+    return [f"{label} ({side})" for label, _ in fields for side in ("Old", "New")]
+
+
+def _field_values(
+    old: Message | Signal | None,
+    new: Message | Signal | None,
+    fields: tuple[tuple[str, str], ...],
+) -> list[object]:
+    values = []
+    for _, attr in fields:
+        for entity in (old, new):
+            value = getattr(entity, attr) if entity is not None else None
+            if attr == "signals" and value is not None:
+                value = len(value)
+            elif attr == "byte_order" and value is not None:
+                value = "Intel/little-endian (1)" if value == 1 else "Motorola/big-endian (0)"
+            elif attr == "value_descriptions" and value is not None:
+                value = ", ".join(f"{raw}={label}" for raw, label in value)
+            elif isinstance(value, tuple):
+                value = ", ".join(str(item) for item in value)
+            values.append(value)
+    return values
+
+
+def _message_receivers(message: Message | None) -> str:
+    if message is None:
+        return ""
+    return ", ".join(sorted({node for signal in message.signals.values() for node in signal.receivers}))
+
+
+def _context_values(change: Change, signal: bool = False) -> list[str]:
+    old, new = change.old_message, change.new_message
+    if signal:
+        old_rx = ", ".join(change.old_signal.receivers) if change.old_signal else ""
+        new_rx = ", ".join(change.new_signal.receivers) if change.new_signal else ""
+    else:
+        old_rx, new_rx = _message_receivers(old), _message_receivers(new)
+    return [
+        _fmt_can_id(old.can_id) if old else "",
+        _fmt_can_id(new.can_id) if new else "",
+        old.transmitter if old else "",
+        new.transmitter if new else "",
+        old_rx, new_rx,
+    ]
+
 
 def _fmt_confidence(confidence: float | None) -> str:
     return "" if confidence is None else f"{confidence:.2f}"

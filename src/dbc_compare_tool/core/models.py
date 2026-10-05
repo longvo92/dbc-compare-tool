@@ -125,6 +125,11 @@ class Change:
     parent_message: str = ""
     confidence_level: str = ""  # "High", "Medium", "Low", or ""
     property_diffs: tuple[tuple[str, str, str], ...] = ()  # (property_name, old_value, new_value)
+    # Matched parent context can exist on both sides even for an added/removed signal.
+    old_message: Message | None = None
+    new_message: Message | None = None
+    old_signal: Signal | None = None
+    new_signal: Signal | None = None
 
 
 @dataclass
@@ -132,6 +137,7 @@ class ComparisonResult:
     message_changes: list[Change] = field(default_factory=list)
     signal_changes: list[Change] = field(default_factory=list)
     file_pairs: list[FilePairSummary] = field(default_factory=list)
+    include_unchanged: bool = False
 
     def summary(self) -> dict[str, int]:
         metrics = {
@@ -150,5 +156,10 @@ class ComparisonResult:
         for change in self.signal_changes:
             key = f"Signals {change.change_type}"
             metrics[key] = metrics.get(key, 0) + 1
-        metrics["Total Changes"] = sum(metrics.values())
+        metrics["Total Changes"] = sum(
+            count for key, count in metrics.items() if not key.endswith(" Unchanged")
+        )
+        if self.include_unchanged:
+            metrics.setdefault("Messages Unchanged", 0)
+            metrics.setdefault("Signals Unchanged", 0)
         return metrics

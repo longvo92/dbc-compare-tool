@@ -3,7 +3,7 @@ from __future__ import annotations
 import warnings
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -59,13 +59,16 @@ class DatabaseMatch:
 
 
 class DbcComparator:
+    def __init__(self, include_unchanged: bool = False) -> None:
+        self.include_unchanged = include_unchanged
+
     def compare_folders(
         self,
         old_folder: Path,
         new_folder: Path,
         progress_callback: Callable[[str], None] | None = None,
     ) -> ComparisonResult:
-        result = ComparisonResult()
+        result = ComparisonResult(include_unchanged=self.include_unchanged)
         old_only: list[DatabaseCandidate] = []
         new_only: list[DatabaseCandidate] = []
 
@@ -173,7 +176,7 @@ class DbcComparator:
         referenced by any pair are reported as added. Each new file may be
         paired with at most one old file.
         """
-        result = ComparisonResult()
+        result = ComparisonResult(include_unchanged=self.include_unchanged)
         old_files = collect_dbc_files(old_folder)
         new_files = collect_dbc_files(new_folder)
 
@@ -280,6 +283,8 @@ class DbcComparator:
         result: ComparisonResult | None = None,
     ) -> ComparisonResult:
         result = result or ComparisonResult()
+        result.include_unchanged = result.include_unchanged or self.include_unchanged
+        message_start = len(result.message_changes)
 
         old_by_id = _messages_by_frame_id(old_db)
         new_by_id = _messages_by_frame_id(new_db)
@@ -307,15 +312,15 @@ class DbcComparator:
                 )
             else:
                 description = _changed_properties(old_properties, new_properties)
-                if description:
+                if description or self.include_unchanged:
                     result.message_changes.append(
                         Change(
                             dbc_file=dbc_file,
-                            change_type="Modified",
+                            change_type="Modified" if description else "Unchanged",
                             old_name=old_message.name,
                             new_name=new_message.name,
                             confidence=None,
-                            description=description,
+                            description=description or "Message properties unchanged",
                             can_id=new_message.can_id,
                             property_diffs=_get_property_diffs(old_properties, new_properties),
                         )
@@ -374,6 +379,13 @@ class DbcComparator:
             )
             self._append_all_signals(dbc_file, message, "Added", result)
 
+        for index in range(message_start, len(result.message_changes)):
+            change = result.message_changes[index]
+            result.message_changes[index] = replace(
+                change,
+                old_message=old_db.messages.get(change.old_name),
+                new_message=new_db.messages.get(change.new_name),
+            )
         return result
 
     def _compare_signals(
@@ -384,6 +396,7 @@ class DbcComparator:
         result: ComparisonResult,
     ) -> None:
         parent_name = new_message.name
+        signal_start = len(result.signal_changes)
         common_names = sorted(set(old_message.signals) & set(new_message.signals))
         matched_old = set(common_names)
         matched_new = set(common_names)
@@ -394,10 +407,11 @@ class DbcComparator:
             old_properties = old_signal.comparable_properties()
             new_properties = new_signal.comparable_properties()
             description = _changed_properties(old_properties, new_properties)
-            if description:
+            if description or self.include_unchanged:
                 result.signal_changes.append(
                     Change(
-                        dbc_file, "Modified", name, name, None, description,
+                        dbc_file, "Modified" if description else "Unchanged", name, name,
+                        None, description or "Signal properties unchanged",
                         parent_message=parent_name,
                         property_diffs=_get_property_diffs(old_properties, new_properties),
                     )
@@ -460,6 +474,17 @@ class DbcComparator:
                 Change(dbc_file, "Added", "", signal.name, None, description, parent_message=parent_name)
             )
 
+        for index in range(signal_start, len(result.signal_changes)):
+            change = result.signal_changes[index]
+            result.signal_changes[index] = replace(
+                change,
+                can_id=new_message.can_id if change.new_name else old_message.can_id,
+                old_message=old_message,
+                new_message=new_message,
+                old_signal=old_message.signals.get(change.old_name),
+                new_signal=new_message.signals.get(change.new_name),
+            )
+
     def _append_all_signals(self, dbc_file: str, message: Message, change_type: str, result: ComparisonResult) -> None:
         for signal in message.signals.values():
             result.signal_changes.append(
@@ -471,6 +496,11 @@ class DbcComparator:
                     new_name=signal.name if change_type == "Added" else "",
                     confidence=None,
                     description=f"Signal {change_type.lower()} with parent message",
+                    can_id=message.can_id,
+                    old_message=message if change_type == "Removed" else None,
+                    new_message=message if change_type == "Added" else None,
+                    old_signal=signal if change_type == "Removed" else None,
+                    new_signal=signal if change_type == "Added" else None,
                 )
             )
 
@@ -491,23 +521,30 @@ def reject_signal_renames(result: ComparisonResult, rejected_indices: set[int]) 
             signal_changes.append(change)
             continue
         if rename_index in rejected_indices:
-            signal_changes.append(Change(
-                dbc_file=change.dbc_file,
+            signal_changes.append(replace(
+                change,
                 change_type="Removed",
                 old_name=change.old_name,
                 new_name="",
                 confidence=None,
                 description="Signal removed (rename rejected by user)",
                 parent_message=change.parent_message,
+                can_id=change.old_message.can_id if change.old_message else change.can_id,
+                new_signal=None,
+                confidence_level="",
+                property_diffs=(),
             ))
-            signal_changes.append(Change(
-                dbc_file=change.dbc_file,
+            signal_changes.append(replace(
+                change,
                 change_type="Added",
                 old_name="",
                 new_name=change.new_name,
                 confidence=None,
                 description="Signal added (rename rejected by user)",
                 parent_message=change.parent_message,
+                old_signal=None,
+                confidence_level="",
+                property_diffs=(),
             ))
         else:
             signal_changes.append(change)
@@ -517,6 +554,7 @@ def reject_signal_renames(result: ComparisonResult, rejected_indices: set[int]) 
         message_changes=result.message_changes,
         signal_changes=signal_changes,
         file_pairs=result.file_pairs,
+        include_unchanged=result.include_unchanged,
     )
 
 
@@ -524,15 +562,17 @@ def filter_result(result: ComparisonResult, selected_types: set[str]) -> Compari
     """Keep only the change types the user asked for.
 
     An empty selection means "no filter" and returns the result unchanged.
+    Full impact review bypasses type filtering to preserve the complete inventory.
     File pairs are always preserved so the DBC Overview sheet still lists
     every compared file, including the ones whose changes were filtered out.
     """
-    if not selected_types:
+    if not selected_types or result.include_unchanged:
         return result
     return ComparisonResult(
         message_changes=[c for c in result.message_changes if c.change_type in selected_types],
         signal_changes=[c for c in result.signal_changes if c.change_type in selected_types],
         file_pairs=result.file_pairs,
+        include_unchanged=result.include_unchanged,
     )
 
 

@@ -50,6 +50,7 @@ It discovers every `.dbc` file recursively, pairs the corresponding databases �
 - **Rename review** — when a complete manual pairing is used, every detected signal rename is shown with its confidence before export; reject one and it is reported as Removed + Added instead.
 - **Value tables and comments** — `VAL_` value tables are compared for signals, `CM_` comments for both messages and signals.
 - **Change-type filter** — include only Added / Removed / Modified / Renamed in the report.
+- **Full impact review** — optionally export all messages and signals, including `Unchanged`, with filterable OLD/NEW ECU Tx/Rx and technical properties.
 - **Robust parsing** — an unparsable DBC is flagged `Parse Error` and the rest of the comparison continues; UTF-8, UTF-8 with BOM and the CANdb++ default encoding are all handled.
 - **CLI mode** — same comparison engine, scriptable for CI or batch runs.
 
@@ -80,6 +81,12 @@ One workbook, five sheets:
 | `Property Diff`   | One row per changed property, before and after                                                                                                                       |
 
 Rows are colour-coded by change type — 🟩 Added, 🟥 Removed, 🟨 Modified, 🟦 Renamed — and CAN IDs are written in hexadecimal (`0x1A3`).
+
+`Message Details`, `Signal Details` and `Property Diff` include separate **ECU Node Tx (Old/New)** and **ECU Node Rx (Old/New)** columns. Message Rx is the union of its signals' receivers; signal Tx comes from its parent message. Multi-node cells contain comma-separated names (use Excel's **Text Filters → Contains** for one ECU).
+
+Detail sheets also show OLD/NEW CAN IDs, frame type, DLC, cycle time, signal counts and descriptions. Signal rows include both parent names and full signal properties: layout, scaling, range, unit, value type, multiplexing, value tables and comments.
+
+In **Full impact review**, unchanged entries appear in gray and are counted separately from **Total Changes**. `Unchanged` describes the entity's own compared properties: a message can contain modified signals, and a signal can belong to a renamed/modified message. Review both detail sheets and the OLD/NEW context. `Property Diff` continues to list changed properties only. The Summary records the report mode and skipped parse-error count; check `DBC Overview` for incomplete coverage.
 
 **`Summary` — the headline numbers:**
 
@@ -155,6 +162,14 @@ The `-e .` step is required: the package lives under `src/`, so `python -m dbc_c
 ```
 
 `--old` and `--new` are required. Folder paths may contain spaces. `--out` is optional; when omitted, the report is written beside the new baseline folder as `compared_<new-folder-name>.xlsx`. An explicit `--out` path must end in `.xlsx`. The GUI applies the same automatic output rule when **Report Path** is left empty.
+
+For a complete inventory for technical impact review:
+
+```powershell
+dbc-compare-tool --old examples\old --new examples\new --include-unchanged --out impact_review.xlsx
+```
+
+In the GUI, tick **Full impact review (include Unchanged)** before **Run Compare**. This disables and bypasses the change-type filters, including for manual pairing and rename review. The default remains changes only.
 
 Exit codes: `0` success, `1` parse or write failure, `2` bad arguments or missing folder.
 

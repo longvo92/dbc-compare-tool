@@ -24,6 +24,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--old", required=True, nargs="+", metavar="PATH", help="Old baseline folder")
     parser.add_argument("--new", required=True, nargs="+", metavar="PATH", help="New baseline folder")
     parser.add_argument(
+        "--include-unchanged",
+        action="store_true",
+        help="Full impact review: export all messages/signals, including Unchanged rows",
+    )
+    parser.add_argument(
         "--out",
         nargs="+",
         metavar="PATH",
@@ -40,7 +45,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        result = DbcComparator().compare_folders(old_folder, new_folder, progress_callback=print)
+        result = DbcComparator(include_unchanged=args.include_unchanged).compare_folders(
+            old_folder, new_folder, progress_callback=print
+        )
     except FileNotFoundError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2

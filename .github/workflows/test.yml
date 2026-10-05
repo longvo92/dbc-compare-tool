@@ -28,4 +28,6 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
       - name: Compare the bundled example baselines (CLI smoke test)
-        run: python -m dbc_compare_tool.cli --old examples/old --new examples/new --out report.xlsx
+        run: |
+          python -m dbc_compare_tool.cli --old examples/old --new examples/new --out report.xlsx
+          python -m dbc_compare_tool.cli --old examples/old --new examples/new --include-unchanged --out impact_review.xlsx

@@ -253,16 +253,18 @@ class CompareWorker(QThread):
         old_folder: Path,
         new_folder: Path,
         pair_map: dict[str, str | None] | None = None,
+        include_unchanged: bool = False,
     ) -> None:
         super().__init__()
         self.old_folder = old_folder
         self.new_folder = new_folder
         self.pair_map = pair_map
+        self.include_unchanged = include_unchanged
 
     def run(self) -> None:
         try:
             self.log.emit("Discovering and parsing DBC files...")
-            comparator = DbcComparator()
+            comparator = DbcComparator(include_unchanged=self.include_unchanged)
             if self.pair_map is None:
                 result = comparator.compare_folders(
                     self.old_folder,
@@ -521,6 +523,11 @@ class MainWindow(QMainWindow):
         self.chk_renamed = QCheckBox("Renamed")
         for chk in (self.chk_added, self.chk_removed, self.chk_modified, self.chk_renamed):
             chk.setChecked(True)
+        self.chk_include_unchanged = QCheckBox("Full impact review (include Unchanged)")
+        self.chk_include_unchanged.setToolTip(
+            "Export every message and signal, including unchanged entries. "
+            "Change-type filters are ignored in this mode."
+        )
 
         # A manual-pairing run reviews detected signal renames before export.
         self._review_renames_this_run = False
@@ -631,6 +638,7 @@ class MainWindow(QMainWindow):
         baseline_layout.setContentsMargins(0, 0, 0, 0)
         baseline_layout.setSpacing(10)
         baseline_layout.addWidget(input_group)
+        baseline_layout.addWidget(self.chk_include_unchanged)
         baseline_layout.addLayout(filter_layout)
         baseline_layout.addLayout(buttons)
         baseline_layout.addWidget(log_label)
@@ -648,6 +656,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def _wire_events(self) -> None:
+        self.chk_include_unchanged.toggled.connect(self._update_change_filters)
         self.run_button.clicked.connect(self._run_compare)
         self.manual_pair_button.clicked.connect(self._open_manual_pairing)
         self.open_button.clicked.connect(self._open_report)
@@ -776,7 +785,7 @@ class MainWindow(QMainWindow):
             return
 
         selected = self._selected_change_types()
-        if not selected:
+        if not selected and not self.chk_include_unchanged.isChecked():
             QMessageBox.warning(self, "No Filter Selected", "Select at least one change type to include.")
             return
 
@@ -785,11 +794,15 @@ class MainWindow(QMainWindow):
         self.log_view.clear()
         pairing = "manual pairing" if pair_map is not None else "auto pairing"
         review = ", rename review" if review_renames else ""
-        self._log(f"Starting comparison ({pairing}{review})...")
+        mode = ", full impact review" if self.chk_include_unchanged.isChecked() else ", changes only"
+        self._log(f"Starting comparison ({pairing}{review}{mode})...")
         self.progress.setRange(0, 0)
         self._set_actions_enabled(False)
         self.open_button.setEnabled(False)
-        self.worker = CompareWorker(old_folder, new_folder, pair_map)
+        self.worker = CompareWorker(
+            old_folder, new_folder, pair_map,
+            include_unchanged=self.chk_include_unchanged.isChecked(),
+        )
         self.worker.log.connect(self._log)
         self.worker.compared.connect(self._on_compared)
         self.worker.failed.connect(self._failed)
@@ -798,6 +811,13 @@ class MainWindow(QMainWindow):
     def _set_actions_enabled(self, enabled: bool) -> None:
         self.run_button.setEnabled(enabled)
         self.manual_pair_button.setEnabled(enabled)
+        self.chk_include_unchanged.setEnabled(enabled)
+        self._update_change_filters()
+
+    def _update_change_filters(self) -> None:
+        enabled = self.run_button.isEnabled() and not self.chk_include_unchanged.isChecked()
+        for chk in (self.chk_added, self.chk_removed, self.chk_modified, self.chk_renamed):
+            chk.setEnabled(enabled)
 
     def _on_compared(self, result: ComparisonResult) -> None:
         if self._review_renames_this_run:

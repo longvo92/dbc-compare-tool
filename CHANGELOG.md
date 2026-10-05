@@ -10,6 +10,10 @@ for the procedure.
 
 ## [Unreleased]
 
+### Added
+
+- Filterable OLD/NEW ECU Tx/Rx and technical context in Excel reports, plus an optional full impact-review mode in CLI and GUI that includes unchanged messages and signals without inflating change counts.
+
 ## [0.4.2] - 2026-09-25
 
 ### Changed
