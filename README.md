@@ -151,6 +151,8 @@ The `-e .` step is required: the package lives under `src/`, so `python -m dbc_c
 
 **GUI:**
 
+The **Baselines** section holds folder selection and manual pairing; **Report** holds the output path and export options. **Run Compare** and **Open Report** stay visible at the bottom when the setup area scrolls. Inputs are locked during a run, and the footer shows comparison/export status.
+
 ```powershell
 .\.venv\Scripts\python.exe -m dbc_compare_tool
 ```

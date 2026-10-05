@@ -13,6 +13,8 @@ The tool reports every change between two DBC baselines.
 
 The tool remembers your last-used folders and report path, so the next session starts pre-filled.
 
+Folder selection and **Manual Pairing** are grouped under **Baselines**; output and export options are under **Report**. **Run Compare** and **Open Report** stay visible at the bottom when you scroll a small window. Inputs are locked while comparison/export runs, and the footer shows progress, completion or failure.
+
 ---
 
 ## Understanding the Report

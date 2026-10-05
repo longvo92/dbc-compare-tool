@@ -10,9 +10,16 @@ for the procedure.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-05
+
 ### Added
 
-- Filterable OLD/NEW ECU Tx/Rx and technical context in Excel reports, plus an optional Include Unchanged mode in CLI and GUI without inflating change counts.
+- Filterable OLD/NEW ECU Tx/Rx and technical context in Excel reports.
+- Include Unchanged mode in CLI and GUI to export all compared messages and signals without inflating change counts.
+
+### Changed
+
+- Organize the GUI into Baselines and Report sections, with a lighter execution log, clearer run status, and actions that stay visible when scrolling.
 
 ## [0.4.2] - 2026-09-25
 

@@ -95,6 +95,11 @@ QLineEdit {
 QLineEdit:focus {
     border: 1px solid #2563eb;
 }
+QLineEdit:disabled {
+    background: #f1f5f9;
+    color: #64748b;
+    border-color: #e2e8f0;
+}
 QPushButton {
     background: #ffffff;
     border: 1px solid #d4d9e4;
@@ -119,9 +124,9 @@ QGroupBox {
     border: 1px solid #e1e5ee;
     border-radius: 8px;
     margin-top: 10px;
-    padding: 10px 12px 6px 12px;
+    padding: 12px 14px 10px 14px;
     font-weight: 600;
-    color: #4b5563;
+    color: #334155;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
@@ -131,6 +136,12 @@ QGroupBox::title {
 QCheckBox {
     spacing: 6px;
     font-weight: 400;
+}
+QCheckBox:disabled { color: #64748b; }
+QLabel#runStatus {
+    color: #334155;
+    font-weight: 600;
+    font-size: 9pt;
 }
 QProgressBar {
     background: #e5e9f2;
@@ -144,13 +155,13 @@ QProgressBar::chunk {
     border-radius: 4px;
 }
 QTextEdit#logView {
-    background: #1e2430;
-    color: #d6e2f3;
-    border: none;
+    background: #ffffff;
+    color: #334155;
+    border: 1px solid #e1e5ee;
     border-radius: 8px;
     font-family: 'Cascadia Mono', 'Consolas', monospace;
     font-size: 9pt;
-    padding: 6px;
+    padding: 10px;
 }
 QTextBrowser {
     background: #ffffff;
@@ -510,6 +521,9 @@ class MainWindow(QMainWindow):
         self.open_button = QPushButton("Open Report")
         self.progress = QProgressBar()
         self.log_view = QTextEdit()
+        self.run_status = QLabel("Ready to compare")
+        self.run_status.setObjectName("runStatus")
+        self.run_status.setWordWrap(True)
 
         # Manual pairing saved from the Manual Pairing dialog, plus the folder
         # inputs it was built for; invalidated when either folder changes.
@@ -563,7 +577,7 @@ class MainWindow(QMainWindow):
         title_row.addWidget(version_label, alignment=Qt.AlignmentFlag.AlignVCenter)
         title_row.addStretch()
 
-        subtitle = QLabel("Compare CAN DBC baselines and export an Excel change report")
+        subtitle = QLabel("Compare DBC baselines. Review message and signal changes in Excel.")
         subtitle.setObjectName("appSubtitle")
 
         header = QVBoxLayout()
@@ -571,37 +585,74 @@ class MainWindow(QMainWindow):
         header.addLayout(title_row)
         header.addWidget(subtitle)
 
-        # Input form
-        input_group = QGroupBox()
+        # Baselines and report settings follow the comparison workflow.
+        input_group = QGroupBox("Baselines")
         form = QGridLayout(input_group)
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(8)
 
-        form.addWidget(QLabel("Old Baseline Folder"), 0, 0)
+        old_label = QLabel("Old Baseline Folder")
+        old_label.setBuddy(self.old_input)
+        self.old_input.setAccessibleName("Old Baseline Folder")
+        form.addWidget(old_label, 0, 0)
         form.addWidget(self.old_input, 0, 1)
         old_button = QPushButton("Browse")
+        old_button.setAccessibleName("Browse old baseline folder")
         old_button.clicked.connect(lambda: self._choose_folder(self.old_input))
         form.addWidget(old_button, 0, 2)
 
-        form.addWidget(QLabel("New Baseline Folder"), 1, 0)
+        new_label = QLabel("New Baseline Folder")
+        new_label.setBuddy(self.new_input)
+        self.new_input.setAccessibleName("New Baseline Folder")
+        form.addWidget(new_label, 1, 0)
         form.addWidget(self.new_input, 1, 1)
         new_button = QPushButton("Browse")
+        new_button.setAccessibleName("Browse new baseline folder")
         new_button.clicked.connect(lambda: self._choose_folder(self.new_input))
         form.addWidget(new_button, 1, 2)
 
-        form.addWidget(QLabel("Report Path (optional)"), 2, 0)
-        form.addWidget(self.output_input, 2, 1)
-        output_button = QPushButton("Browse")
-        output_button.clicked.connect(self._choose_report)
-        form.addWidget(output_button, 2, 2)
+        pairing_row = QHBoxLayout()
+        pairing_hint = QLabel("Files are paired automatically. Choose manual pairs when needed.")
+        pairing_hint.setObjectName("hintLabel")
+        pairing_hint.setWordWrap(True)
+        pairing_row.addWidget(pairing_hint, 1)
+        pairing_row.addWidget(self.manual_pair_button)
+        form.addLayout(pairing_row, 2, 0, 1, 3)
+        form.setColumnStretch(1, 1)
 
-        # Change-type filter — a plain row, not a card: it is four checkboxes
-        # that are all on by default, not a section worth its own title.
+        report_group = QGroupBox("Report")
+        report_form = QGridLayout(report_group)
+        report_form.setHorizontalSpacing(10)
+        report_form.setVerticalSpacing(10)
+        output_label = QLabel("Report Path (optional)")
+        output_label.setBuddy(self.output_input)
+        self.output_input.setAccessibleName("Report Path (optional)")
+        report_form.addWidget(output_label, 0, 0)
+        label_width = max(label.sizeHint().width() for label in (old_label, new_label, output_label))
+        for label in (old_label, new_label, output_label):
+            label.setFixedWidth(label_width)
+        report_form.addWidget(self.output_input, 0, 1)
+        output_button = QPushButton("Browse")
+        output_button.setAccessibleName("Browse report output path")
+        output_button.clicked.connect(self._choose_report)
+        report_form.addWidget(output_button, 0, 2)
+        report_form.setColumnStretch(1, 1)
+        report_form.addWidget(self.chk_include_unchanged, 1, 0, 1, 3)
+        self._browse_buttons = (old_button, new_button, output_button)
+
         filter_layout = QHBoxLayout()
         filter_layout.setSpacing(16)
+        filter_label = QLabel("Change types")
+        filter_label.setObjectName("hintLabel")
+        filter_layout.addWidget(filter_label)
         for chk in (self.chk_added, self.chk_removed, self.chk_modified, self.chk_renamed):
             filter_layout.addWidget(chk)
         filter_layout.addStretch()
+        report_form.addLayout(filter_layout, 2, 0, 1, 3)
+        self.report_hint = QLabel("Only selected change types will be exported.")
+        self.report_hint.setObjectName("hintLabel")
+        self.report_hint.setWordWrap(True)
+        report_form.addWidget(self.report_hint, 3, 0, 1, 3)
 
         # Action buttons
         self.run_button.setObjectName("primaryButton")
@@ -614,10 +665,9 @@ class MainWindow(QMainWindow):
         )
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
-        buttons.addWidget(self.run_button)
-        buttons.addWidget(self.manual_pair_button)
+        buttons.addWidget(self.run_status, 1)
         buttons.addWidget(self.open_button)
-        buttons.addStretch()
+        buttons.addWidget(self.run_button)
 
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
@@ -625,22 +675,19 @@ class MainWindow(QMainWindow):
         self.open_button.setEnabled(False)
         self.log_view.setObjectName("logView")
         self.log_view.setReadOnly(True)
+        self.log_view.setPlaceholderText("Comparison progress and results will appear here.")
         self.log_view.setMinimumHeight(140)
 
         log_label = QLabel("Execution Log")
         log_label.setObjectName("hintLabel")
 
-        # Folder-to-folder baseline comparison. The log has no addStretch()
-        # after it: it is the one widget meant to expand and take whatever
-        # vertical space the window has to spare.
+        # Keep actions outside the scroll area, including at the minimum size.
         baseline_content = QWidget()
         baseline_layout = QVBoxLayout(baseline_content)
         baseline_layout.setContentsMargins(0, 0, 0, 0)
         baseline_layout.setSpacing(10)
         baseline_layout.addWidget(input_group)
-        baseline_layout.addWidget(self.chk_include_unchanged)
-        baseline_layout.addLayout(filter_layout)
-        baseline_layout.addLayout(buttons)
+        baseline_layout.addWidget(report_group)
         baseline_layout.addWidget(log_label)
         baseline_layout.addWidget(self.log_view)
         baseline_tab = _scrollable(baseline_content)
@@ -652,8 +699,17 @@ class MainWindow(QMainWindow):
         central_layout.addLayout(header)
         central_layout.addWidget(baseline_tab)
         central_layout.addWidget(self.progress)
+        central_layout.addLayout(buttons)
 
         self.setCentralWidget(central)
+        focus_order = (
+            self.old_input, old_button, self.new_input, new_button,
+            self.manual_pair_button, self.output_input, output_button,
+            self.chk_include_unchanged, self.chk_added, self.chk_removed,
+            self.chk_modified, self.chk_renamed, self.run_button, self.open_button,
+        )
+        for first, second in zip(focus_order, focus_order[1:]):
+            QWidget.setTabOrder(first, second)
 
     def _wire_events(self) -> None:
         self.chk_include_unchanged.toggled.connect(self._update_change_filters)
@@ -797,6 +853,7 @@ class MainWindow(QMainWindow):
         mode = ", include unchanged" if self.chk_include_unchanged.isChecked() else ", changes only"
         self._log(f"Starting comparison ({pairing}{review}{mode})...")
         self.progress.setRange(0, 0)
+        self.run_status.setText("Comparing baselines…")
         self._set_actions_enabled(False)
         self.open_button.setEnabled(False)
         self.worker = CompareWorker(
@@ -812,12 +869,19 @@ class MainWindow(QMainWindow):
         self.run_button.setEnabled(enabled)
         self.manual_pair_button.setEnabled(enabled)
         self.chk_include_unchanged.setEnabled(enabled)
+        for control in (self.old_input, self.new_input, self.output_input, *self._browse_buttons):
+            control.setEnabled(enabled)
         self._update_change_filters()
 
     def _update_change_filters(self) -> None:
         enabled = self.run_button.isEnabled() and not self.chk_include_unchanged.isChecked()
         for chk in (self.chk_added, self.chk_removed, self.chk_modified, self.chk_renamed):
             chk.setEnabled(enabled)
+        self.report_hint.setText(
+            "All messages and signals will be exported. Change-type filters are ignored."
+            if self.chk_include_unchanged.isChecked()
+            else "Only selected change types will be exported."
+        )
 
     def _on_compared(self, result: ComparisonResult) -> None:
         if self._review_renames_this_run:
@@ -840,6 +904,7 @@ class MainWindow(QMainWindow):
                 self._log("Rename review: no renamed signals detected.")
 
         result = filter_result(result, self._selected_change_types())
+        self.run_status.setText("Writing Excel report…")
         self.export_worker = ExportWorker(result, self._pending_output_path)
         self.export_worker.log.connect(self._log)
         self.export_worker.completed.connect(self._completed)
@@ -873,6 +938,7 @@ class MainWindow(QMainWindow):
         self._set_actions_enabled(True)
         self.open_button.setEnabled(True)
         self.last_report = report_path
+        self.run_status.setText(f"Report ready · {summary['Total Changes']} changes")
         self._log(f"Report generated: {report_path}")
         self._log(f"Total changes: {summary['Total Changes']}")
         self._save_paths()
@@ -885,6 +951,7 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self._set_actions_enabled(True)
+        self.run_status.setText("Comparison failed — see log")
         self._log(f"Failed: {message}")
         self.statusBar().showMessage("Failed — see log for details")
         QMessageBox.critical(self, "Comparison Failed", message)

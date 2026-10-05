@@ -36,6 +36,7 @@ This project is a local Windows desktop application for automotive engineers com
 
 5. UI Layer
    - PySide6 desktop UI with an application-wide stylesheet.
+   - Groups folder inputs/manual pairing under Baselines and output/export options under Report. The footer exposes compare/export/completion/failure states and keeps Run Compare and Open Report visible. Input controls and filters are locked during comparison/export.
    - The folder-to-folder Baseline Compare workflow, with its own Execution Log (`log_view`, cleared
      at the start of every run).
    - The controls sit in a `QScrollArea` so a small window scrolls instead of squeezing every
