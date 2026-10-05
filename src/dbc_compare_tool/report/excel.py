@@ -137,7 +137,7 @@ def _write_summary(sheet, result: ComparisonResult) -> None:
     for metric in summary:
         if metric not in SUMMARY_ORDER:
             sheet.append([metric, summary[metric]])
-    sheet.append(["Report Mode", "Full impact review" if result.include_unchanged else "Changes only"])
+    sheet.append(["Report Mode", "Include Unchanged" if result.include_unchanged else "Changes only"])
     sheet.append(["Parse Errors (skipped DBCs)", sum(fp.status == "Parse Error" for fp in result.file_pairs)])
 
 

@@ -8,7 +8,7 @@ The tool reports every change between two DBC baselines.
 2. **New Baseline Folder** — select (or drag & drop) the folder containing the new DBC baseline.
 3. **Report Path** — choose where to save the Excel report (`.xlsx`).
 4. **Include Change Types** — tick the change categories you want in the report (Added / Removed / Modified / Renamed). All are included by default.
-   For a complete inventory, tick **Full impact review (include Unchanged)**. It includes every message and signal and disables the change-type filters.
+   For a complete inventory, tick **Include Unchanged**. It includes every message and signal and disables the change-type filters.
 5. Click **Run Compare**. It uses the file pairs you saved in the **Manual Pairing** dialog when they cover every old file (see below); otherwise it matches files automatically. Progress appears in the Execution Log below, and the final result also shows in the status bar. When finished, click **Open Report** to view the result in Excel.
 
 The tool remembers your last-used folders and report path, so the next session starts pre-filled.
@@ -31,9 +31,9 @@ The detail and Property Diff sheets include **ECU Node Tx (Old/New)** and **ECU 
 
 Detail sheets include OLD/NEW CAN IDs, frame type, DLC, cycle time, signal counts and descriptions. Signal Details also includes both parent message names, layout, signedness/value type, scaling, range, unit, multiplexing, value tables and comments.
 
-### Full Impact Review
+### Include Unchanged
 
-Enable **Full impact review (include Unchanged)** to export the complete compared message/signal inventory, with unchanged rows in gray. It works with automatic pairing, manual pairing and rename review. **Summary** lists unchanged counts separately; **Total Changes** excludes them. **Property Diff** still contains changed properties only.
+Enable **Include Unchanged** to export the complete compared message/signal inventory, with unchanged rows in gray. It works with automatic pairing, manual pairing and rename review. **Summary** lists unchanged counts separately; **Total Changes** excludes them. **Property Diff** still contains changed properties only.
 
 `Unchanged` means the entity's own properties match. A message may still contain changed signals; an unchanged signal may still be affected by a change to its parent message (CAN ID, Tx, cycle time, etc.). Review the OLD/NEW context and both detail sheets together. Check the Summary's skipped parse-error count and DBC Overview before treating the report as complete.
 

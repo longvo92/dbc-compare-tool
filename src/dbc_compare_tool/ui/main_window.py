@@ -523,7 +523,7 @@ class MainWindow(QMainWindow):
         self.chk_renamed = QCheckBox("Renamed")
         for chk in (self.chk_added, self.chk_removed, self.chk_modified, self.chk_renamed):
             chk.setChecked(True)
-        self.chk_include_unchanged = QCheckBox("Full impact review (include Unchanged)")
+        self.chk_include_unchanged = QCheckBox("Include Unchanged")
         self.chk_include_unchanged.setToolTip(
             "Export every message and signal, including unchanged entries. "
             "Change-type filters are ignored in this mode."
@@ -794,7 +794,7 @@ class MainWindow(QMainWindow):
         self.log_view.clear()
         pairing = "manual pairing" if pair_map is not None else "auto pairing"
         review = ", rename review" if review_renames else ""
-        mode = ", full impact review" if self.chk_include_unchanged.isChecked() else ", changes only"
+        mode = ", include unchanged" if self.chk_include_unchanged.isChecked() else ", changes only"
         self._log(f"Starting comparison ({pairing}{review}{mode})...")
         self.progress.setRange(0, 0)
         self._set_actions_enabled(False)

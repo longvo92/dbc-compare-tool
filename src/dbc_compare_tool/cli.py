@@ -26,7 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--include-unchanged",
         action="store_true",
-        help="Full impact review: export all messages/signals, including Unchanged rows",
+        help="Include unchanged messages and signals in the report",
     )
     parser.add_argument(
         "--out",

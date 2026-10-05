@@ -221,7 +221,7 @@ class ImpactReportTests(unittest.TestCase):
         workbook = load_workbook(output)
         self.addCleanup(workbook.close)
         summary = dict(workbook["Summary"].iter_rows(min_row=4, values_only=True))
-        self.assertEqual(summary["Report Mode"], "Full impact review")
+        self.assertEqual(summary["Report Mode"], "Include Unchanged")
         self.assertEqual(summary["Total Changes"], 0)
         self.assertEqual(summary["Parse Errors (skipped DBCs)"], 1)
         self.assertEqual(workbook["Signal Details"].max_row, 3)

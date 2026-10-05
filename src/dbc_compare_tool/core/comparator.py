@@ -562,7 +562,7 @@ def filter_result(result: ComparisonResult, selected_types: set[str]) -> Compari
     """Keep only the change types the user asked for.
 
     An empty selection means "no filter" and returns the result unchanged.
-    Full impact review bypasses type filtering to preserve the complete inventory.
+    Include Unchanged bypasses type filtering to preserve the complete inventory.
     File pairs are always preserved so the DBC Overview sheet still lists
     every compared file, including the ones whose changes were filtered out.
     """

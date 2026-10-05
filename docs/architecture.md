@@ -20,7 +20,7 @@ This project is a local Windows desktop application for automotive engineers com
    - `DbcComparator(include_unchanged=True)` retains exact matches as `Unchanged`; default results remain changes only. Each detail entry carries OLD/NEW parent message and signal references for report context. Unchanged counts are excluded from `Total Changes`.
    - Accepts a caller-supplied pairing map (`compare_manual`) as an alternative to automatic file pairing.
    - Owns the two post-processing passes over a finished result: `filter_result` (keep only the requested change types, file pairs always preserved) and `reject_signal_renames` (turn a rename the user rejected back into a Removed + Added pair). Both live in the engine so the CLI and tests can reach them without importing the UI.
-   - Full impact review bypasses change-type filtering. Rename rejection preserves parent context and only the corresponding side's signal snapshot.
+   - Include Unchanged bypasses change-type filtering. Rename rejection preserves parent context and only the corresponding side's signal snapshot.
 
 3. Rename Detection Engine
    - Messages with the same frame key and a different name are exact renames (confidence 1.0).
@@ -57,7 +57,7 @@ under `core` or `report` imports either of them. That is what lets CI run the fu
 | Entry point | Module | Notes |
 |---|---|---|
 | `dbc-compare-tool-gui`, `python -m dbc_compare_tool` | `ui/main_window.py` | Desktop app; `__main__.py` forwards to the UI |
-| `dbc-compare-tool`, `python -m dbc_compare_tool.cli` | `cli.py` | `--old`, `--new` required; `--out` optional; `--include-unchanged` enables full impact review; exit `0` ok, `1` write failure, `2` bad arguments |
+| `dbc-compare-tool`, `python -m dbc_compare_tool.cli` | `cli.py` | `--old`, `--new` required; `--out` optional; `--include-unchanged` exports unchanged entries too; exit `0` ok, `1` write failure, `2` bad arguments |
 
 The CLI always uses automatic pairing and keeps every detected rename; manual pairing and rename
 review are UI-only workflows built on the same engine calls.
