@@ -9,7 +9,7 @@ The tool reports every change between two DBC baselines.
 3. **Report Path** — choose where to save the Excel report (`.xlsx`).
 4. **Include Change Types** — tick the change categories you want in the report (Added / Removed / Modified / Renamed). All are included by default.
    For a complete inventory, tick **Include Unchanged**. It includes every message and signal and disables the change-type filters.
-5. Click **Run Compare**. It uses the file pairs you saved in the **Manual Pairing** dialog when they cover every old file (see below); otherwise it matches files automatically. Progress appears in the Execution Log below, and the final result also shows in the status bar. When finished, click **Open Report** to view the result in Excel.
+5. Click **Run Compare**. It uses the file pairs you saved in the **Manual Pairing** dialog when they cover every old file (see below); otherwise it matches files automatically. Progress appears in the Execution Log. When finished, click **Open Report** to view the result in Excel.
 
 The tool remembers your last-used folders and report path, so the next session starts pre-filled.
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSettings, QThread, Signal
@@ -550,7 +549,6 @@ class MainWindow(QMainWindow):
         self._build_layout()
         self._wire_events()
         self._restore_paths()
-        self.statusBar().showMessage("Ready")
 
     def _build_menu(self) -> None:
         help_menu = self.menuBar().addMenu("Help")
@@ -612,7 +610,7 @@ class MainWindow(QMainWindow):
         form.addWidget(new_button, 1, 2)
 
         pairing_row = QHBoxLayout()
-        pairing_hint = QLabel("Files are paired automatically. Choose manual pairs when needed.")
+        pairing_hint = QLabel("Automatic pairing by default.")
         pairing_hint.setObjectName("hintLabel")
         pairing_hint.setWordWrap(True)
         pairing_row.addWidget(pairing_hint, 1)
@@ -649,9 +647,10 @@ class MainWindow(QMainWindow):
             filter_layout.addWidget(chk)
         filter_layout.addStretch()
         report_form.addLayout(filter_layout, 2, 0, 1, 3)
-        self.report_hint = QLabel("Only selected change types will be exported.")
+        self.report_hint = QLabel("Change-type filters are ignored.")
         self.report_hint.setObjectName("hintLabel")
         self.report_hint.setWordWrap(True)
+        self.report_hint.setVisible(False)
         report_form.addWidget(self.report_hint, 3, 0, 1, 3)
 
         # Action buttons
@@ -877,11 +876,7 @@ class MainWindow(QMainWindow):
         enabled = self.run_button.isEnabled() and not self.chk_include_unchanged.isChecked()
         for chk in (self.chk_added, self.chk_removed, self.chk_modified, self.chk_renamed):
             chk.setEnabled(enabled)
-        self.report_hint.setText(
-            "All messages and signals will be exported. Change-type filters are ignored."
-            if self.chk_include_unchanged.isChecked()
-            else "Only selected change types will be exported."
-        )
+        self.report_hint.setVisible(self.chk_include_unchanged.isChecked())
 
     def _on_compared(self, result: ComparisonResult) -> None:
         if self._review_renames_this_run:
@@ -942,10 +937,6 @@ class MainWindow(QMainWindow):
         self._log(f"Report generated: {report_path}")
         self._log(f"Total changes: {summary['Total Changes']}")
         self._save_paths()
-        ts = datetime.now().strftime("%H:%M")
-        self.statusBar().showMessage(
-            f"Last run: {summary['Total Changes']} total changes  ·  {ts}"
-        )
 
     def _failed(self, message: str) -> None:
         self.progress.setRange(0, 1)
@@ -953,7 +944,6 @@ class MainWindow(QMainWindow):
         self._set_actions_enabled(True)
         self.run_status.setText("Comparison failed — see log")
         self._log(f"Failed: {message}")
-        self.statusBar().showMessage("Failed — see log for details")
         QMessageBox.critical(self, "Comparison Failed", message)
 
     def _open_report(self) -> None:
