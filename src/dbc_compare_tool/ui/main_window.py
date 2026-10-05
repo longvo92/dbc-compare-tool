@@ -33,9 +33,9 @@ from PySide6.QtWidgets import (
 )
 
 from dbc_compare_tool import __version__
-from dbc_compare_tool.core.comparator import DbcComparator, filter_result, reject_signal_renames
+from dbc_compare_tool.core.comparator import DbcComparator, filter_result
 from dbc_compare_tool.core.discovery import collect_dbc_files
-from dbc_compare_tool.core.models import Change, ComparisonResult
+from dbc_compare_tool.core.models import ComparisonResult
 from dbc_compare_tool.report.excel import default_report_path, write_excel_report
 from dbc_compare_tool.ui.widgets import DropLineEdit, NoWheelComboBox
 
@@ -414,89 +414,6 @@ class ManualPairingDialog(QDialog):
         return dict(self._pair_map)
 
 
-class RenameReviewDialog(QDialog):
-    """Lets the user accept or reject each auto-detected signal rename.
-
-    Rejected renames are exported as a Removed + Added pair instead.
-    """
-
-    def __init__(self, parent, renames: list[Change]) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Review Renamed Signals")
-        self.resize(880, 480)
-
-        layout = QVBoxLayout(self)
-        hint = QLabel(
-            "Uncheck a row to reject the rename — it will be reported as a "
-            "Removed + Added signal in the Excel report. Hover a row for details."
-        )
-        hint.setObjectName("hintLabel")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-
-        headers = ["Accept", "DBC File", "Message", "Old Signal", "New Signal", "Confidence", "Level"]
-        self.table = QTableWidget(len(renames), len(headers))
-        self.table.setHorizontalHeaderLabels(headers)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-
-        for row, change in enumerate(renames):
-            accept_item = QTableWidgetItem()
-            accept_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-            accept_item.setCheckState(Qt.CheckState.Checked)
-            confidence = "" if change.confidence is None else f"{change.confidence:.2f}"
-            cells = [
-                accept_item,
-                QTableWidgetItem(change.dbc_file),
-                QTableWidgetItem(change.parent_message),
-                QTableWidgetItem(change.old_name),
-                QTableWidgetItem(change.new_name),
-                QTableWidgetItem(confidence),
-                QTableWidgetItem(change.confidence_level),
-            ]
-            for col, item in enumerate(cells):
-                if change.description:
-                    item.setToolTip(change.description)
-                self.table.setItem(row, col, item)
-
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setStretchLastSection(False)
-        layout.addWidget(self.table)
-
-        accept_all = QPushButton("Accept All")
-        reject_all = QPushButton("Reject All")
-        accept_all.clicked.connect(lambda: self._set_all(Qt.CheckState.Checked))
-        reject_all.clicked.connect(lambda: self._set_all(Qt.CheckState.Unchecked))
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-
-        button_row = QHBoxLayout()
-        button_row.addWidget(accept_all)
-        button_row.addWidget(reject_all)
-        button_row.addStretch()
-        button_row.addWidget(buttons)
-        layout.addLayout(button_row)
-
-    def _set_all(self, state: Qt.CheckState) -> None:
-        for row in range(self.table.rowCount()):
-            self.table.item(row, 0).setCheckState(state)
-
-    def rejected_indices(self) -> set[int]:
-        return {
-            row
-            for row in range(self.table.rowCount())
-            if self.table.item(row, 0).checkState() != Qt.CheckState.Checked
-        }
-
-
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -541,9 +458,6 @@ class MainWindow(QMainWindow):
             "Export every message and signal, including unchanged entries. "
             "Change-type filters are ignored in this mode."
         )
-
-        # A manual-pairing run reviews detected signal renames before export.
-        self._review_renames_this_run = False
 
         self._build_menu()
         self._build_layout()
@@ -820,12 +734,11 @@ class MainWindow(QMainWindow):
         return None
 
     def _run_compare(self) -> None:
-        # One button: a manual pairing that covers every old file wins and its
-        # renames are reviewed before export; anything else runs auto pairing.
+        # A complete manual DBC pairing overrides automatic file pairing.
         pair_map = self._complete_manual_pairing()
-        self._start_compare(pair_map=pair_map, review_renames=pair_map is not None)
+        self._start_compare(pair_map=pair_map)
 
-    def _start_compare(self, pair_map: dict[str, str | None] | None, review_renames: bool) -> None:
+    def _start_compare(self, pair_map: dict[str, str | None] | None) -> None:
         old_text, new_text = self._current_folder_inputs()
         # Guard empty text explicitly: Path("") is ".", which is_dir() accepts.
         if not old_text or not new_text or not Path(old_text).is_dir() or not Path(new_text).is_dir():
@@ -845,12 +758,10 @@ class MainWindow(QMainWindow):
             return
 
         self._pending_output_path = output_path
-        self._review_renames_this_run = review_renames
         self.log_view.clear()
         pairing = "manual pairing" if pair_map is not None else "auto pairing"
-        review = ", rename review" if review_renames else ""
         mode = ", include unchanged" if self.chk_include_unchanged.isChecked() else ", changes only"
-        self._log(f"Starting comparison ({pairing}{review}{mode})...")
+        self._log(f"Starting comparison ({pairing}{mode})...")
         self.progress.setRange(0, 0)
         self.run_status.setText("Comparing baselines…")
         self._set_actions_enabled(False)
@@ -879,25 +790,6 @@ class MainWindow(QMainWindow):
         self.report_hint.setVisible(self.chk_include_unchanged.isChecked())
 
     def _on_compared(self, result: ComparisonResult) -> None:
-        if self._review_renames_this_run:
-            renames = [c for c in result.signal_changes if c.change_type == "Renamed"]
-            if renames:
-                dialog = RenameReviewDialog(self, renames)
-                if dialog.exec() == QDialog.DialogCode.Accepted:
-                    rejected = dialog.rejected_indices()
-                    if rejected:
-                        result = reject_signal_renames(result, rejected)
-                        self._log(
-                            f"Rename review: {len(rejected)} of {len(renames)} signal rename(s) "
-                            "rejected — exported as Removed + Added."
-                        )
-                    else:
-                        self._log(f"Rename review: all {len(renames)} signal rename(s) accepted.")
-                else:
-                    self._log("Rename review cancelled — keeping all detected renames.")
-            else:
-                self._log("Rename review: no renamed signals detected.")
-
         result = filter_result(result, self._selected_change_types())
         self.run_status.setText("Writing Excel report…")
         self.export_worker = ExportWorker(result, self._pending_output_path)

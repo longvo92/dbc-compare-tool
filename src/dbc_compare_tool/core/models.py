@@ -111,6 +111,7 @@ class FilePairSummary:
     message_count_new: int
     signal_count_old: int
     signal_count_new: int
+    pairing_reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

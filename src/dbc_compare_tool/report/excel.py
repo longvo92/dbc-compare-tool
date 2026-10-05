@@ -152,6 +152,7 @@ def _write_overview(sheet, file_pairs: list[FilePairSummary]) -> None:
         "Messages (New)",
         "Signals (Old)",
         "Signals (New)",
+        "Pairing Reason",
     ])
     for fp in file_pairs:
         sheet.append([
@@ -164,6 +165,7 @@ def _write_overview(sheet, file_pairs: list[FilePairSummary]) -> None:
             fp.message_count_new,
             fp.signal_count_old,
             fp.signal_count_new,
+            "; ".join(fp.pairing_reasons),
         ])
 
 

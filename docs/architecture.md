@@ -14,19 +14,18 @@ This project is a local Windows desktop application for automotive engineers com
 2. Comparison Engine
    - Discovers `.dbc` files in old and new baseline folders.
    - Compares files with the same relative path first.
-   - Pairs old-only and new-only `.dbc` files by CAN ID overlap and message-layout similarity.
+   - Pairs old-only and new-only `.dbc` files using inventory-weighted keywords and content, then solves a maximum-score one-to-one assignment (`core/pairing.py`).
    - Matches messages by frame key first; still-unmatched messages run through structural rename detection before being treated as added/removed.
    - Compares value tables and comments as regular properties, surfaced in change descriptions and the Property Diff sheet.
    - `DbcComparator(include_unchanged=True)` retains exact matches as `Unchanged`; default results remain changes only. Each detail entry carries OLD/NEW parent message and signal references for report context. Unchanged counts are excluded from `Total Changes`.
    - Accepts a caller-supplied pairing map (`compare_manual`) as an alternative to automatic file pairing.
-   - Owns the two post-processing passes over a finished result: `filter_result` (keep only the requested change types, file pairs always preserved) and `reject_signal_renames` (turn a rename the user rejected back into a Removed + Added pair). Both live in the engine so the CLI and tests can reach them without importing the UI.
-   - Include Unchanged bypasses change-type filtering. Rename rejection preserves parent context and only the corresponding side's signal snapshot.
+   - `filter_result` retains requested change types and always preserves file pairs. Include Unchanged bypasses filtering.
 
 3. Rename Detection Engine
    - Messages with the same frame key and a different name are exact renames (confidence 1.0).
    - Messages whose frame key also changed are matched via `MessageRenameDetector`, a structural scorer over DLC, transmitter, cycle time, signal count, and signal-layout overlap (name similarity is minor supporting evidence).
    - Signals are compared inside an already-matched message pair — which includes a pair matched by message rename, so the two messages may carry different CAN IDs. Signals left over after exact-name matching are scored via `SignalRenameDetector`, with a relaxed name-driven mode for Event Matrix-style messages.
-   - DBC file pairing still uses deterministic structural scoring so renamed `.dbc` files can be compared.
+   - DBC file pairing combines deterministic keyword/content scoring with global assignment. Message/signal rename detection remains automatic in both interfaces.
 
 4. Report Generator
    - Writes a single Excel workbook; shared styling lives in `report/_style.py`.
@@ -60,8 +59,7 @@ under `core` or `report` imports either of them. That is what lets CI run the fu
 | `dbc-compare-tool-gui`, `python -m dbc_compare_tool` | `ui/main_window.py` | Desktop app; `__main__.py` forwards to the UI |
 | `dbc-compare-tool`, `python -m dbc_compare_tool.cli` | `cli.py` | `--old`, `--new` required; `--out` optional; `--include-unchanged` exports unchanged entries too; exit `0` ok, `1` write failure, `2` bad arguments |
 
-The CLI always uses automatic pairing and keeps every detected rename; manual pairing and rename
-review are UI-only workflows built on the same engine calls.
+The CLI uses automatic DBC pairing. The GUI also offers manual DBC pairing; both flows export directly and automatically detect message/signal renames.
 
 ## Build and Release
 
@@ -94,7 +92,7 @@ flowchart TD
     C -->|no| P2[parse, hold as old-only / new-only]
     P1 -.parse error.-> X[Parse Error row<br/>remaining files continue]
     P2 -.parse error.-> X
-    P2 --> E[match_renamed_databases<br/>_score_database_pair ≥ 0.55]
+    P2 --> E[match_renamed_databases<br/>global assignment, score ≥ 0.55]
     P1 --> D[compare_databases]
     E -->|paired| D
     E -->|unpaired| U[compare_databases against an empty database<br/>DBC Added / DBC Removed]
@@ -108,8 +106,7 @@ flowchart TD
     J --> M
     U --> M
     X --> M
-    M --> N[reject_signal_renames<br/>UI rename review, optional]
-    N --> O[filter_result<br/>selected change types]
+    M --> O[filter_result<br/>selected change types]
     O --> R[report.excel.write_excel_report<br/>5 sheets]
 ```
 
@@ -120,12 +117,7 @@ per file: the file becomes a `Parse Error` row in `file_pairs` and every other f
 
 ## Rename Strategy
 
-DBC file pairing prioritizes:
-
-- CAN ID overlap
-- Common message structural similarity
-- Message-name overlap
-- File-name similarity as supporting evidence only
+DBC file pairing locks equal relative paths first. Remaining databases are profiled once and indexed by keywords, frame keys and message names. Only pairs sharing evidence are scored; a global maximum-score assignment selects the combination, with dummy slots allowing unmatched files. Sorting relative paths makes tied results deterministic. Filename/folder keywords can be sufficient even without shared CAN IDs or messages.
 
 Message rename detection prefers frame key equality; when the frame key also changes, unmatched messages fall back to `MessageRenameDetector` structural scoring (threshold 0.60).
 
@@ -137,26 +129,20 @@ Throughout the engine a message is identified by its **frame key** — the tuple
 
 ## Scoring Reference
 
-Every score below is a weighted sum of independent checks, capped at 1.0. A pair is only considered
-a rename when its score reaches the detector's threshold. All weights are literal constants in the
-source — this section is the authoritative description of them, so update both together.
+Message/signal rename scores are weighted sums capped at 1.0. DBC file scoring combines two evidence scores. Keep this reference in sync with the constants in source.
 
-Each weight set sums to exactly 1.0, so a perfect match on every criterion scores 1.0 and the weights
-read directly as "share of the decision". The one exception is the event-like signal set, which tops
-out at 0.88; that is explained below.
+### DBC file pairing — `core/pairing.py`
 
-### DBC file pairing — `_score_database_pair` (comparator.py)
+Applied after relative-path matching. Threshold: `FILE_RENAME_THRESHOLD = 0.55`.
 
-Applied only to files left over after relative-path matching. Threshold: `FILE_RENAME_THRESHOLD = 0.55`.
-A pair scores 0.0 and is never paired when either database has no messages, or when the two share no
-frame key at all.
+- Tokenize filename and parent folders, splitting camel case and separators; preserve channel numbers such as `CAN1`. Ignore generic words, standalone numbers, calendar dates and revision tokens (`v2`, `rev3`, etc.). Filename token strength is 1.0; folder token strength is 0.35.
+- Weight each token by `1 + log((inventory size + 1) / (files containing token + 1))`, over both remaining inventories. Shared rare keywords therefore distinguish files more strongly.
+- With any shared keyword, `name_score = 0.65 + 0.20 × weighted containment + 0.15 × weighted Jaccard`; otherwise zero. Containment divides shared weight by the smaller total token weight; Jaccard divides it by the union weight.
+- `content_score = 0.55 × frame-key overlap + 0.15 × message-name overlap + 0.25 × structure × frame-key overlap + 0.05 × relative-path SequenceMatcher ratio`. Set overlap divides by the larger inventory count. Standard and extended frames use distinct keys.
+- Final score: `min(1, max(content_score, 0.85 × name_score) + 0.10 × min(content_score, name_score))`.
+- The rectangular Hungarian algorithm uses the smaller inventory as rows and maximizes total accepted-pair score. Below-threshold pairs and unmatched dummy slots have zero score. Each old/new file is used at most once; this replaces greedy selection of the strongest individual pair.
 
-| Criterion | Weight | Measure |
-|---|---|---|
-| CAN ID overlap | 0.55 | `common frame keys / max(old count, new count)`, keyed by `(can_id, is_extended_frame)` |
-| Common-ID structure | 0.25 | Mean structure score over the shared frame keys (table below) |
-| Message-name overlap | 0.15 | `common message names / max(old count, new count)` |
-| File-name similarity | 0.05 | `SequenceMatcher` ratio over the lowercased relative paths |
+Shared keywords can pair entirely different content, including empty databases. This is a deliberately permissive heuristic, not a probability of identity. Pairing reasons are exposed in progress logs and DBC Overview; manual DBC pairing can override the result. No Qt or extra dependency is required.
 
 Structure score per shared frame key — `_common_message_structure_score`:
 
@@ -237,12 +223,7 @@ Confidence levels shown in the UI and report: **High** ≥ 0.90, **Medium** ≥ 
 
 ## Validation Status
 
-The tool has been exercised against real project DBC baselines of several kinds, not only the
-bundled examples. The rename thresholds held up on that material and were **not** changed as a
-result: DBC file pairing at `FILE_RENAME_THRESHOLD = 0.55`, `MessageRenameDetector` at 0.60, and
-`SignalRenameDetector` at 0.82 (0.65 for event-like messages). Treat those numbers as field-confirmed
-defaults rather than initial guesses; the weights behind them are documented under
-[Scoring Reference](#scoring-reference).
+Earlier versions were exercised against real project DBC baselines. Message and signal rename thresholds remain at 0.60 and 0.82 (0.65 for event-like messages). The new global DBC keyword matcher keeps a 0.55 acceptance threshold but changes its scoring; its behavior is covered by synthetic inventory tests and CLI/GUI smoke checks, and still needs real-baseline validation.
 
 What that field testing did **not** cover yet — these remain unvalidated outside the unit suite:
 
@@ -261,7 +242,7 @@ One test module per layer, `unittest` only, no Qt import anywhere in `tests/`:
 |---|---|
 | `test_parser.py` | Parsing, including byte order and value type against a mixed-endian fixture |
 | `test_comparator.py`, `test_message_rename.py`, `test_rename.py` | Comparison and rename scoring |
-| `test_manual_pairing_and_review.py` | Manual pairing and rename rejection |
+| `test_manual_pairing.py`, `test_dbc_pairing.py` | Manual DBC pairing, keyword scoring, global assignment and report evidence |
 | `test_value_and_comment.py` | `VAL_` and `CM_` comparison |
 | `test_robustness.py` | Frame-key collisions, parse-error resilience, discovery, encodings |
 | `test_report.py` | The Excel writer, written to disk and read back with openpyxl |
@@ -281,8 +262,7 @@ with the suite still green, which a release build would then have shipped.
 - The rename thresholds are a deliberate trade-off: at 0.60, `MessageRenameDetector` favours missing
   a CAN-ID-changed rename (reported as Removed + Added) over inventing a wrong one. Field use has not
   shown a reason to move it, but a project with heavy simultaneous ID-and-name churn may want it lower.
-- Rename review is available only after a complete manual pairing. Automatic pairing keeps detected
-  renames without a review step, and a *missed* rename has no "merge these two" affordance.
+- Message/signal matching is automatic, with no manual pairing or rejection dialog. Review heuristic matches in the report; use manual DBC pairing when file counterparts need correction.
 - There is exactly one rename change type, `Renamed`, graded by confidence level. An earlier
   `Possible Rename` type for ambiguous matches was removed once the confidence level made it
   redundant; do not reintroduce a second change type for uncertainty, since it splits the same

@@ -19,6 +19,8 @@ for the procedure.
 
 ### Changed
 
+- Pair renamed DBCs across the entire unmatched inventory using filename/folder keywords and content; shared keywords can match files with completely different messages. Show pairing reasons in DBC Overview.
+- Manual pairing now selects DBC files only and exports directly, without the signal-rename review dialog.
 - Organize the GUI into Baselines and Report sections, with a lighter execution log, clearer run status, and actions that stay visible when scrolling.
 
 ## [0.4.2] - 2026-09-25

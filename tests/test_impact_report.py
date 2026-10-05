@@ -10,7 +10,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from dbc_compare_tool.cli import main
-from dbc_compare_tool.core.comparator import DbcComparator, filter_result, reject_signal_renames
+from dbc_compare_tool.core.comparator import DbcComparator, filter_result
 from dbc_compare_tool.core.models import DbcDatabase, Message, Signal
 from dbc_compare_tool.report.excel import write_excel_report
 
@@ -157,19 +157,16 @@ class ImpactReportTests(unittest.TestCase):
         self.assertEqual(added["Start Bit (New)"], 32)
         self.assertIsNone(added["Start Bit (Old)"])
 
-    def test_rejected_rename_keeps_ecu_context_and_full_mode(self):
+    def test_automatic_rename_keeps_ecu_context_and_full_mode(self):
         renamed = replace(self.message.signals["Speed"], name="VehicleSpeed")
         new = _database(replace(self.message, signals={"VehicleSpeed": renamed, "State": self.message.signals["State"]}))
-        result = reject_signal_renames(self._compare(new=new), {0})
+        result = self._compare(new=new)
         self.assertTrue(result.include_unchanged)
         rows = _rows(self._report(result)["Signal Details"])
-        removed = next(row for row in rows if row["Change Type"] == "Removed")
-        added = next(row for row in rows if row["Change Type"] == "Added")
-        self.assertEqual(removed["ECU Node Rx (Old)"], "ECM, IC")
-        self.assertIsNone(removed["ECU Node Rx (New)"])
-        self.assertEqual(added["ECU Node Rx (New)"], "ECM, IC")
-        self.assertIsNone(added["ECU Node Rx (Old)"])
-        self.assertEqual(result.summary()["Total Changes"], 2)
+        renamed_row = next(row for row in rows if row["Change Type"] == "Renamed")
+        self.assertEqual(renamed_row["ECU Node Rx (Old)"], "ECM, IC")
+        self.assertEqual(renamed_row["ECU Node Rx (New)"], "ECM, IC")
+        self.assertEqual(result.summary()["Total Changes"], 1)
 
     def test_extended_and_standard_twins_are_both_in_inventory(self):
         extended = replace(self.message, name="ExtendedStatus", is_extended_frame=True)

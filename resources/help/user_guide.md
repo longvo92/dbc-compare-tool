@@ -22,7 +22,7 @@ Folder selection and **Manual Pairing** are grouped under **Baselines**; output 
 The Excel report contains the following sheets:
 
 * **Summary** — total change counts by category, with report title and generation time.
-* **DBC Overview** — one row per DBC file pair: pairing status (`Matched` / `DBC Added` / `DBC Removed` / `DBC Renamed` / `Manually Paired` / `Parse Error`), pairing confidence, and message/signal counts for both baselines.
+* **DBC Overview** — one row per DBC file pair: pairing status (`Matched` / `DBC Added` / `DBC Removed` / `DBC Renamed` / `Manually Paired` / `Parse Error`), pairing confidence/reasons, and message/signal counts for both baselines.
 * **Message Details** — every added, removed, modified, or renamed message.
 * **Signal Details** — every added, removed, modified, or renamed signal.
 * **Property Diff** — before/after table for every changed property, one row per property. Old values highlighted in salmon, new values in green.
@@ -35,7 +35,7 @@ Detail sheets include OLD/NEW CAN IDs, frame type, DLC, cycle time, signal count
 
 ### Include Unchanged
 
-Enable **Include Unchanged** to export the complete compared message/signal inventory, with unchanged rows in gray. It works with automatic pairing, manual pairing and rename review. **Summary** lists unchanged counts separately; **Total Changes** excludes them. **Property Diff** still contains changed properties only.
+Enable **Include Unchanged** to export the complete compared message/signal inventory, with unchanged rows in gray. It works with automatic and manual DBC pairing. **Summary** lists unchanged counts separately; **Total Changes** excludes them. **Property Diff** still contains changed properties only.
 
 `Unchanged` means the entity's own properties match. A message may still contain changed signals; an unchanged signal may still be affected by a change to its parent message (CAN ID, Tx, cycle time, etc.). Review the OLD/NEW context and both detail sheets together. Check the Summary's skipped parse-error count and DBC Overview before treating the report as complete.
 
@@ -51,9 +51,9 @@ dbc-compare-tool --old "path\to\old baseline" --new "path\to\new baseline" --inc
 
 ### Automatic DBC File Matching
 
-DBC files are matched between the two folders automatically. Matching is not based solely on file names: if a DBC file was renamed while its content remains substantially unchanged, the tool still identifies it as the same DBC and compares the pair.
+Files with the same relative path are compared first. For the remaining files, the tool looks across both inventories and chooses the one-to-one assignment with the highest total score. It uses shared filename/folder keywords, CAN IDs, message names and layouts. Common release/version decorations are ignored; keywords that distinguish files within the inventory carry more weight.
 
-Example: `BCM.dbc` (old) vs `BCM_V2.dbc` (new) — detected as a renamed DBC file, not as one removed and one added file.
+Example: `OEM_Powertrain_2024.dbc` vs `Vehicle_Powertrain_2026.dbc` can pair through `Powertrain`, even with completely different messages and CAN IDs. This deliberately allows more matches and can pair unrelated content. Check **Pairing Reason**, paths and counts in **DBC Overview**, or override the DBC pairs manually. The confidence is a heuristic score, not a probability.
 
 ### Manual DBC Pairing
 
@@ -61,7 +61,7 @@ If automatic matching does not pair the files the way you want, choose the pairs
 
 1. Select both baseline folders, then click **Manual Pairing…** to open the pairing dialog.
 2. For each old-baseline file, pick its new-baseline counterpart from the drop-down. New-baseline files not selected in any pair are reported as added.
-3. Click **Save** to store the pairing, then click **Run Compare**.
+3. Click **Save**, then **Run Compare** to export directly. There is no message/signal pairing dialog; their rename detection runs automatically.
 
 **Run Compare** uses the saved pairing only when every old file is paired; leave any old file on `— Removed (no pair) —` and it falls back to automatic matching for the whole run. Manually matched pairs with different file names appear as **Manually Paired** on the DBC Overview sheet. Each new file can only be used in one pair. Changing either baseline folder discards the saved pairing — open the dialog again.
 
@@ -77,19 +77,9 @@ Signal renames are identified by comparing technical characteristics — start b
 
 Example: `VehSpd` renamed to `VehicleSpeed` — classified as **Renamed**.
 
-### Reviewing Renamed Signals
-
-Rename detection is heuristic, so a run that uses a complete manual pairing lets you double-check it before the report is written: after the comparison finishes, a dialog lists every auto-detected signal rename with its confidence score and level (hover a row to see the match reasons and property changes).
-
-* Leave a row checked to **accept** the rename — it is reported as **Renamed**, as usual.
-* Uncheck a row to **reject** it — the report shows the old signal as **Removed** and the new signal as **Added** instead.
-* **Accept All** / **Reject All** buttons handle long lists; **Cancel** keeps all detected renames.
-
-An automatic-pairing run skips this step and keeps every detected rename automatically.
-
 ### Confidence Levels
 
-Every detected rename carries a confidence score and a level — **High**, **Medium**, or **Low** — shown in the report and in the rename review dialog. Use it to decide how much of the result needs a second look; anything below High is worth checking.
+Every detected rename carries a confidence score and a level — **High**, **Medium**, or **Low** — shown in the report. Use it to decide how much of the result needs a second look; anything below High is worth checking.
 
 Two situations lower confidence on purpose:
 

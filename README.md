@@ -43,11 +43,10 @@ It discovers every `.dbc` file recursively, pairs the corresponding databases �
 ## Features
 
 - **Folder-level comparison** — recursively discovers all `.dbc` files in both baselines and reports every message and signal change between them.
-- **DBC file pairing** — matches files by relative path first, then by CAN ID overlap and message-layout similarity, so a renamed `.dbc` is still compared as the same database.
-- **Manual pairing** — a **Manual Pairing…** dialog lets you pick the new-baseline counterpart for each old file when automatic pairing is not what you want.
+- **DBC file pairing** — matches relative paths first, then chooses a global one-to-one pairing using shared filename/folder keywords and message content. Release/version decorations are ignored; shared keywords can pair DBCs even when their contents differ completely.
+- **Manual pairing** — **Manual Pairing…** chooses DBC counterparts only. **Run Compare** exports directly; message and signal matching stays automatic.
 - **Message rename detection** — scored over CAN ID, DLC, transmitter, cycle time, signal count and signal layout, so a message whose CAN ID changed can still be matched.
 - **Signal rename detection** — scored over start bit, length, byte order, signedness, factor/offset, unit and receivers, with name similarity as supporting evidence. Event Matrix-style messages, where those properties repeat across dozens of signals, switch to a name-driven mode that can never report High confidence.
-- **Rename review** — when a complete manual pairing is used, every detected signal rename is shown with its confidence before export; reject one and it is reported as Removed + Added instead.
 - **Value tables and comments** — `VAL_` value tables are compared for signals, `CM_` comments for both messages and signals.
 - **Change-type filter** — include only Added / Removed / Modified / Renamed in the report.
 - **Include Unchanged** — optionally export all messages and signals, including `Unchanged`, with filterable OLD/NEW ECU Tx/Rx and technical properties.
@@ -75,7 +74,7 @@ One workbook, five sheets:
 | Sheet             | Contents                                                                                                                                                             |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Summary`         | Change counts by category, report title, generation time                                                                                                             |
-| `DBC Overview`    | One row per file pair: status (`Matched` / `DBC Added` / `DBC Removed` / `DBC Renamed` / `Manually Paired` / `Parse Error`), pairing confidence, message/signal counts |
+| `DBC Overview`    | One row per file pair: status (`Matched` / `DBC Added` / `DBC Removed` / `DBC Renamed` / `Manually Paired` / `Parse Error`), pairing confidence/reasons, message/signal counts |
 | `Message Details` | Every added, removed, modified or renamed message                                                                                                                    |
 | `Signal Details`  | Every added, removed, modified or renamed signal, with rename confidence                                                                                             |
 | `Property Diff`   | One row per changed property, before and after                                                                                                                       |
@@ -171,7 +170,7 @@ For a complete inventory for technical impact review:
 dbc-compare-tool --old examples\old --new examples\new --include-unchanged --out impact_review.xlsx
 ```
 
-In the GUI, tick **Include Unchanged** before **Run Compare**. This disables and bypasses the change-type filters, including for manual pairing and rename review. The default remains changes only.
+In the GUI, tick **Include Unchanged** before **Run Compare**. This disables and bypasses the change-type filters, including for manual DBC pairing. The default remains changes only.
 
 Exit codes: `0` success, `1` parse or write failure, `2` bad arguments or missing folder.
 
