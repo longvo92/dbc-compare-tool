@@ -10,6 +10,8 @@ for the procedure.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-12
+
 ### Added
 
 - Compare two DBC files directly in the CLI and GUI, with automatic report naming beside the new file.
