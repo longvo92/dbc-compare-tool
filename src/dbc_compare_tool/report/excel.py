@@ -7,7 +7,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from dbc_compare_tool.core.models import Change, ComparisonResult, FilePairSummary, Message, Signal
+from dbc_compare_tool.core.models import Change, ComparisonResult, FilePairSummary, Message
 from dbc_compare_tool.report._style import BORDER, HEADER_BG, HEADER_FG
 
 
@@ -70,30 +70,18 @@ _STATUS_FILL: dict[str, str] = {
 
 _BORDER = BORDER
 
-# Append context columns to preserve the existing report columns and their order.
+# Keep identity and routing context available for impact-review filtering.
 _CONTEXT_HEADERS = [
     f"{label} ({side})"
     for label in ("CAN ID", "ECU Node Tx", "ECU Node Rx")
     for side in ("Old", "New")
 ]
-_MESSAGE_FIELDS = (
-    ("DLC", "dlc"), ("Extended Frame", "is_extended_frame"),
-    ("Cycle Time (ms)", "cycle_time_ms"), ("Signal Count", "signals"),
-    ("Message Description", "comment"),
-)
-_SIGNAL_FIELDS = (
-    ("Start Bit", "start_bit"), ("Length", "length"), ("Byte Order", "byte_order"),
-    ("Value Type", "value_type"), ("Signed", "is_signed"), ("Factor", "factor"),
-    ("Offset", "offset"), ("Minimum", "minimum"), ("Maximum", "maximum"),
-    ("Unit", "unit"), ("Multiplexer", "is_multiplexer"),
-    ("Multiplexer IDs", "multiplexer_ids"), ("Multiplexer Signal", "multiplexer_signal"),
-    ("Value Descriptions", "value_descriptions"), ("Signal Description", "comment"),
-)
 
 
-def default_report_path(new_folder: Path) -> Path:
-    """Place an automatically named report beside the new baseline folder."""
-    return new_folder.parent / f"compared_{new_folder.name}.xlsx"
+def default_report_path(new_path: Path) -> Path:
+    """Place an automatically named report beside the new baseline file/folder."""
+    name = new_path.stem if new_path.is_file() else new_path.name
+    return new_path.parent / f"compared_{name}.xlsx"
 
 
 def write_excel_report(result: ComparisonResult, output_path: Path) -> Path:
@@ -103,7 +91,7 @@ def write_excel_report(result: ComparisonResult, output_path: Path) -> Path:
     overview_sheet = workbook.create_sheet("DBC Overview")
     message_sheet = workbook.create_sheet("Message Details")
     signal_sheet = workbook.create_sheet("Signal Details")
-    diff_sheet = workbook.create_sheet("Property Diff")
+    diff_sheet = workbook.create_sheet("Changed Properties")
 
     _write_summary(summary_sheet, result)
     _write_overview(overview_sheet, result.file_pairs)
@@ -139,6 +127,11 @@ def _write_summary(sheet, result: ComparisonResult) -> None:
             sheet.append([metric, summary[metric]])
     sheet.append(["Report Mode", "Include Unchanged" if result.include_unchanged else "Changes only"])
     sheet.append(["Parse Errors (skipped DBCs)", sum(fp.status == "Parse Error" for fp in result.file_pairs)])
+    if result.ecu_map:
+        sheet.append([])
+        sheet.append(["ECU Node (Old)", "ECU Node (New)"])
+        for old_node, new_node in sorted(result.ecu_map.items()):
+            sheet.append([old_node, new_node])
 
 
 def _write_overview(sheet, file_pairs: list[FilePairSummary]) -> None:
@@ -178,9 +171,8 @@ def _write_message_details(sheet, changes: list[Change]) -> None:
         "CAN ID",
         "Confidence Score",
         "Confidence Level",
-        "Change Description",
+        "Match Reason",
         *_CONTEXT_HEADERS,
-        *_field_headers(_MESSAGE_FIELDS),
     ])
     for change in changes:
         sheet.append([
@@ -191,9 +183,8 @@ def _write_message_details(sheet, changes: list[Change]) -> None:
             _fmt_can_id(change.can_id),
             _fmt_confidence(change.confidence),
             change.confidence_level,
-            change.description,
+            _match_reason(change),
             *_context_values(change),
-            *_field_values(change.old_message, change.new_message, _MESSAGE_FIELDS),
         ])
 
 
@@ -206,12 +197,10 @@ def _write_signal_details(sheet, changes: list[Change]) -> None:
         "New Signal Name",
         "Confidence Score",
         "Confidence Level",
-        "Changed Properties",
+        "Match Reason",
         "Parent Message (Old)",
         "Parent Message (New)",
         *_CONTEXT_HEADERS,
-        *_field_headers(_MESSAGE_FIELDS),
-        *_field_headers(_SIGNAL_FIELDS),
     ])
     for change in changes:
         sheet.append([
@@ -222,12 +211,10 @@ def _write_signal_details(sheet, changes: list[Change]) -> None:
             change.new_name,
             _fmt_confidence(change.confidence),
             change.confidence_level,
-            change.description,
+            _match_reason(change),
             change.old_message.name if change.old_message else "",
             change.new_message.name if change.new_message else "",
             *_context_values(change, signal=True),
-            *_field_values(change.old_message, change.new_message, _MESSAGE_FIELDS),
-            *_field_values(change.old_signal, change.new_signal, _SIGNAL_FIELDS),
         ])
 
 
@@ -316,10 +303,15 @@ def _format_summary(sheet) -> None:
         if metric == "Total Changes":
             for cell in row:
                 cell.font = Font(bold=True, size=11)
+        elif metric == "ECU Node (Old)":
+            for cell in row:
+                cell.fill = header_fill
+                cell.font = header_font
         sheet.row_dimensions[row_idx].height = 18
 
-    sheet.column_dimensions["A"].width = 30
-    sheet.column_dimensions["B"].width = 24
+    for column, default_width in (("A", 30), ("B", 24)):
+        max_len = max(len(str(cell.value or "")) for cell in sheet[column][2:])
+        sheet.column_dimensions[column].width = min(max(default_width, max_len + 2), 60)
     sheet.freeze_panes = "A4"
 
 
@@ -439,29 +431,15 @@ def _format_property_diff_sheet(sheet) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _field_headers(fields: tuple[tuple[str, str], ...]) -> list[str]:
-    return [f"{label} ({side})" for label, _ in fields for side in ("Old", "New")]
-
-
-def _field_values(
-    old: Message | Signal | None,
-    new: Message | Signal | None,
-    fields: tuple[tuple[str, str], ...],
-) -> list[object]:
-    values = []
-    for _, attr in fields:
-        for entity in (old, new):
-            value = getattr(entity, attr) if entity is not None else None
-            if attr == "signals" and value is not None:
-                value = len(value)
-            elif attr == "byte_order" and value is not None:
-                value = "Intel/little-endian (1)" if value == 1 else "Motorola/big-endian (0)"
-            elif attr == "value_descriptions" and value is not None:
-                value = ", ".join(f"{raw}={label}" for raw, label in value)
-            elif isinstance(value, tuple):
-                value = ", ".join(str(item) for item in value)
-            values.append(value)
-    return values
+def _match_reason(change: Change) -> str:
+    """Retain rename evidence without copying technical property changes."""
+    if change.change_type != "Renamed":
+        return ""
+    marker = "Matched by: "
+    for line in reversed(change.description.splitlines()):
+        if line.startswith(marker):
+            return line[len(marker):]
+    return ""
 
 
 def _message_receivers(message: Message | None) -> str:

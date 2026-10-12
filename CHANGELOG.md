@@ -10,6 +10,15 @@ for the procedure.
 
 ## [Unreleased]
 
+### Added
+
+- Compare two DBC files directly in the CLI and GUI, with automatic report naming beside the new file.
+- Pair renamed OLD/NEW ECU nodes in the CLI and GUI, preserving original report names while suppressing routing changes caused only by those renames.
+
+### Changed
+
+- Simplify Message Details and Signal Details to identification, ECU context and rename evidence; move all technical property changes to the renamed Changed Properties sheet.
+
 ## [0.5.0] - 2026-10-05
 
 ### Added

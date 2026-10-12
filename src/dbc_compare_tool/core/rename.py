@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Generic, Iterable, Protocol, TypeVar
 
+from dbc_compare_tool.core.ecu import receivers_match, transmitters_match
 from dbc_compare_tool.core.models import Message, Signal, jaccard
 
 
@@ -163,6 +164,9 @@ class EventMessageDetector:
 class MessageRenameDetector(GreedyRenameDetector[Message]):
     threshold = 0.60
 
+    def __init__(self, ecu_map: dict[str, str] | None = None) -> None:
+        self.ecu_map = dict(ecu_map or {})
+
     def score(self, old: Message, new: Message) -> tuple[float, tuple[str, ...]]:
         score = 0.0
         reasons: list[str] = []
@@ -172,7 +176,7 @@ class MessageRenameDetector(GreedyRenameDetector[Message]):
         if old.dlc == new.dlc:
             score += 0.12
             reasons.append("DLC matched")
-        if old.transmitter == new.transmitter:
+        if transmitters_match(old.transmitter, new.transmitter, self.ecu_map):
             score += 0.08
             reasons.append("Transmitter matched")
         if old.cycle_time_ms is not None and old.cycle_time_ms == new.cycle_time_ms:
@@ -199,13 +203,14 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
     threshold = 0.82
     event_threshold = 0.65  # Lower threshold for event-like messages
 
-    def __init__(self, is_event_like: bool = False) -> None:
+    def __init__(self, is_event_like: bool = False, ecu_map: dict[str, str] | None = None) -> None:
         """Initialize the detector for a normal or event-like message.
 
         Args:
             is_event_like: Whether the parent message is event-like, which changes scoring.
         """
         self.is_event_like = is_event_like
+        self.ecu_map = dict(ecu_map or {})
         if is_event_like:
             self.threshold = self.event_threshold
 
@@ -226,7 +231,7 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
             (old.factor == new.factor, 0.12, "Factor matched"),
             (old.offset == new.offset, 0.12, "Offset matched"),
             (old.unit == new.unit, 0.08, "Unit matched"),
-            (old.receivers == new.receivers, 0.11, "Receivers matched"),
+            (receivers_match(old.receivers, new.receivers, self.ecu_map), 0.11, "Receivers matched"),
         ]
         for matched, weight, reason in weighted_checks:
             if matched:
@@ -257,7 +262,7 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
             (old.factor == new.factor, 0.04, "Factor matched"),
             (old.offset == new.offset, 0.04, "Offset matched"),
             (old.unit == new.unit, 0.04, "Unit matched"),
-            (old.receivers == new.receivers, 0.06, "Receivers matched"),
+            (receivers_match(old.receivers, new.receivers, self.ecu_map), 0.06, "Receivers matched"),
         ]
         for matched, weight, reason in weighted_checks:
             if matched:

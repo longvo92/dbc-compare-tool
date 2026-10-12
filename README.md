@@ -2,7 +2,7 @@
 
 > Compare two Automotive CAN DBC baselines and see what actually changed.
 
-A Windows desktop + CLI tool that compares DBC baseline folders and writes an engineering-grade Excel change report.
+A Windows desktop + CLI tool that compares two DBC files or baseline folders and writes an engineering-grade Excel change report.
 
 ![DBC Compare Tool](docs/screenshot_main.png)
 
@@ -20,12 +20,12 @@ A text diff shows you which characters moved. This shows you which **messages an
 
 ```mermaid
 flowchart LR
-    OLD[Old baseline folder] --> T[DBC Compare Tool]
-    NEW[New baseline folder] --> T
+    OLD[Old DBC file or folder] --> T[DBC Compare Tool]
+    NEW[New DBC file or folder] --> T
     T --> XLSX[("report.xlsx")]
 ```
 
-It discovers every `.dbc` file recursively, pairs the corresponding databases — even renamed ones — compares messages and signals, detects likely renames, and writes one multi-sheet workbook.
+Select two `.dbc` files to compare them directly, or two folders to discover and pair databases recursively. The tool compares messages and signals, detects likely renames, and writes one multi-sheet workbook.
 
 ### What it detects
 
@@ -43,6 +43,8 @@ It discovers every `.dbc` file recursively, pairs the corresponding databases �
 ## Features
 
 - **Folder-level comparison** — recursively discovers all `.dbc` files in both baselines and reports every message and signal change between them.
+- **Direct file comparison** — select **Files** in the GUI or pass two `.dbc` paths to the CLI. The selected files are compared as one pair regardless of their names.
+- **ECU node pairing** — map an OLD node to its renamed NEW counterpart with **ECU Pairing…** or repeated CLI `--ecu-pair OLD=NEW` options. Paired names count as the same Tx/Rx node during comparison and rename detection; original names remain visible in the report.
 - **DBC file pairing** — matches relative paths first, then chooses a global one-to-one pairing using shared filename/folder keywords and message content. Release/version decorations are ignored; shared keywords can pair DBCs even when their contents differ completely.
 - **Manual pairing** — **Manual Pairing…** chooses DBC counterparts only. **Run Compare** exports directly; message and signal matching stays automatic.
 - **Message rename detection** — scored over CAN ID, DLC, transmitter, cycle time, signal count and signal layout, so a message whose CAN ID changed can still be matched.
@@ -77,27 +79,19 @@ One workbook, five sheets:
 | `DBC Overview`    | One row per file pair: status (`Matched` / `DBC Added` / `DBC Removed` / `DBC Renamed` / `Manually Paired` / `Parse Error`), pairing confidence/reasons, message/signal counts |
 | `Message Details` | Every added, removed, modified or renamed message                                                                                                                    |
 | `Signal Details`  | Every added, removed, modified or renamed signal, with rename confidence                                                                                             |
-| `Property Diff`   | One row per changed property, before and after                                                                                                                       |
+| `Changed Properties` | One row per changed property, before and after                                                                                                                    |
 
 Rows are colour-coded by change type — 🟩 Added, 🟥 Removed, 🟨 Modified, 🟦 Renamed — and CAN IDs are written in hexadecimal (`0x1A3`).
 
-`Message Details`, `Signal Details` and `Property Diff` include separate **ECU Node Tx (Old/New)** and **ECU Node Rx (Old/New)** columns. Message Rx is the union of its signals' receivers; signal Tx comes from its parent message. Multi-node cells contain comma-separated names (use Excel's **Text Filters → Contains** for one ECU).
+`Message Details`, `Signal Details` and `Changed Properties` include separate **ECU Node Tx (Old/New)** and **ECU Node Rx (Old/New)** columns. Message Rx is the union of its signals' receivers; signal Tx comes from its parent message. Multi-node cells contain comma-separated names (use Excel's **Text Filters → Contains** for one ECU).
 
-Detail sheets also show OLD/NEW CAN IDs, frame type, DLC, cycle time, signal counts and descriptions. Signal rows include both parent names and full signal properties: layout, scaling, range, unit, value type, multiplexing, value tables and comments.
+Detail sheets keep entity names, parent names, OLD/NEW CAN IDs, ECU context and rename confidence. Technical property snapshots and repeated before/after descriptions are removed; changes to DLC, cycle time, signal layout, scaling, range, multiplexing, value tables and comments appear only in **Changed Properties**. Selected ECU mappings are recorded in **Summary**.
 
-With **Include Unchanged**, unchanged entries appear in gray and are counted separately from **Total Changes**. `Unchanged` describes the entity's own compared properties: a message can contain modified signals, and a signal can belong to a renamed/modified message. Review both detail sheets and the OLD/NEW context. `Property Diff` continues to list changed properties only. The Summary records the report mode and skipped parse-error count; check `DBC Overview` for incomplete coverage.
+With **Include Unchanged**, unchanged entries appear in gray and are counted separately from **Total Changes**. `Unchanged` describes the entity's own compared properties after applying any selected ECU mapping: a message can contain modified signals, and a signal can belong to a renamed/modified message. Review both detail sheets and **Changed Properties**, which continues to list changed properties only. The Summary records the report mode and skipped parse-error count; check `DBC Overview` for incomplete coverage.
 
 **`Summary` — the headline numbers:**
 
 ![Summary sheet](docs/report_summary.png)
-
-**`Signal Details` — what changed, and how confident the rename match is:**
-
-![Signal Details sheet](docs/report_signal_details.png)
-
-**`Property Diff` — the old and new value of every property that moved:**
-
-![Property Diff sheet](docs/report_property_diff.png)
 
 ---
 
@@ -150,7 +144,7 @@ The `-e .` step is required: the package lives under `src/`, so `python -m dbc_c
 
 **GUI:**
 
-The **Baselines** section holds folder selection and manual pairing; **Report** holds the output path and export options. **Run Compare** and **Open Report** stay visible at the bottom when the setup area scrolls. Inputs are locked during a run, and the footer shows comparison/export status.
+In **Baselines**, choose **Folders** or **Files** under **Input Type**, then select OLD and NEW inputs of that type. **Manual Pairing…** selects DBC counterparts in folder mode; **ECU Pairing…** selects renamed nodes in either mode. **Report** holds the output path and export options. Inputs are locked during a run, and the footer shows comparison/export status.
 
 ```powershell
 .\.venv\Scripts\python.exe -m dbc_compare_tool
@@ -162,7 +156,15 @@ The **Baselines** section holds folder selection and manual pairing; **Report** 
 .\.venv\Scripts\python.exe -m dbc_compare_tool.cli --old "path\to\old baseline" --new "path\to\new baseline"
 ```
 
-`--old` and `--new` are required. Folder paths may contain spaces. `--out` is optional; when omitted, the report is written beside the new baseline folder as `compared_<new-folder-name>.xlsx`. An explicit `--out` path must end in `.xlsx`. The GUI applies the same automatic output rule when **Report Path** is left empty.
+`--old` and `--new` are required and must both be folders or both be `.dbc` files. Paths may contain spaces. `--out` is optional; when omitted, the report is written beside the NEW input as `compared_<folder-name>.xlsx` or `compared_<file-stem>.xlsx`. An explicit `--out` path must end in `.xlsx`. The GUI applies the same automatic output rule when **Report Path** is left empty.
+
+Compare two files and account for renamed ECU nodes:
+
+```powershell
+dbc-compare-tool --old old.dbc --new new.dbc --ecu-pair VCU=VCU_NEW --ecu-pair BMS=BMS_NEW
+```
+
+Each NEW node can have one OLD counterpart. Unmapped names retain their original identity; mappings that collide with another unmapped node are rejected. Mappings apply across the selected inputs and do not filter out other ECUs. A routing change consisting only of a selected node rename is suppressed; actual Tx/Rx changes still appear in **Changed Properties**. Changing either input or **Input Type** clears saved file and ECU pairs in the GUI.
 
 For a complete inventory for technical impact review:
 
@@ -172,7 +174,7 @@ dbc-compare-tool --old examples\old --new examples\new --include-unchanged --out
 
 In the GUI, tick **Include Unchanged** before **Run Compare**. This disables and bypasses the change-type filters, including for manual DBC pairing. The default remains changes only.
 
-Exit codes: `0` success, `1` parse or write failure, `2` bad arguments or missing folder.
+Exit codes: `0` success, `1` parse or write failure, `2` bad arguments, invalid ECU pairing, or missing input.
 
 `run_gui.bat` and `run_cli.bat` at the repository root do the same, using `.venv` in the repo.
 
@@ -186,7 +188,7 @@ Run the test suite:
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
-CI runs the same suite on Linux and Windows against Python 3.9, 3.10 and 3.12, plus a CLI comparison of the bundled example baselines. The comparison engine and the report writers have no UI dependency, so those runs install `cantools` and `openpyxl` only — no test imports Qt.
+CI runs the same suite on Linux and Windows against Python 3.9, 3.10 and 3.12, plus CLI comparisons of the bundled example folders and files. The comparison engine and report writers have no UI dependency; those jobs install `cantools` and `openpyxl` only and skip GUI tests. A separate Windows job installs Qt and exercises the GUI input and pairing workflow.
 
 Build distributables (zipapp and one-file `.exe`):
 

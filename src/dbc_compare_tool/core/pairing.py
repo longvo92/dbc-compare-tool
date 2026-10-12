@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import PurePosixPath
 
+from dbc_compare_tool.core.ecu import transmitters_match
 from dbc_compare_tool.core.models import DbcDatabase, Message, jaccard
 
 FILE_RENAME_THRESHOLD = 0.55
@@ -66,6 +67,7 @@ def _profile(candidate: DatabaseCandidate) -> _Profile:
 
 def match_renamed_databases(
     old_candidates: list[DatabaseCandidate], new_candidates: list[DatabaseCandidate],
+    ecu_map: dict[str, str] | None = None,
 ) -> list[DatabaseMatch]:
     """Choose a maximum-score one-to-one assignment over the unmatched inventory."""
     if not old_candidates or not new_candidates:
@@ -91,7 +93,7 @@ def match_renamed_databases(
                 possible.update(index.get((kind, value), ()))
         for column in sorted(possible):
             new = new_profiles[column]
-            score, reasons = _score_database_pair(old, new, weights)
+            score, reasons = _score_database_pair(old, new, weights, ecu_map)
             if score >= FILE_RENAME_THRESHOLD:
                 scores[row][column] = score
                 candidates[row, column] = DatabaseMatch(old.candidate, new.candidate, score, reasons)
@@ -108,7 +110,9 @@ def match_renamed_databases(
     return [candidates[key] for key in sorted(selected) if key in candidates]
 
 
-def _score_database_pair(old: _Profile, new: _Profile, weights: dict[str, float]) -> tuple[float, tuple[str, ...]]:
+def _score_database_pair(
+    old: _Profile, new: _Profile, weights: dict[str, float], ecu_map: dict[str, str] | None = None,
+) -> tuple[float, tuple[str, ...]]:
     reasons: list[str] = []
     shared_words = old.keywords.keys() & new.keywords.keys()
     name_score = 0.0
@@ -124,7 +128,7 @@ def _score_database_pair(old: _Profile, new: _Profile, weights: dict[str, float]
     common_ids = old.frames.keys() & new.frames.keys()
     id_overlap = len(common_ids) / max(len(old.frames), len(new.frames), 1)
     name_overlap = len(old.names & new.names) / max(len(old.names), len(new.names), 1)
-    structure = _common_message_structure_score(old.frames, new.frames, common_ids) if common_ids else 0.0
+    structure = _common_message_structure_score(old.frames, new.frames, common_ids, ecu_map) if common_ids else 0.0
     similarity = SequenceMatcher(None, old.candidate.relative_path.lower(), new.candidate.relative_path.lower()).ratio()
     content_score = 0.55 * id_overlap + 0.15 * name_overlap + 0.25 * structure * id_overlap + 0.05 * similarity
     if id_overlap:
@@ -140,11 +144,12 @@ def _score_database_pair(old: _Profile, new: _Profile, weights: dict[str, float]
 def _common_message_structure_score(
     old_by_id: dict[tuple[int, bool], Message], new_by_id: dict[tuple[int, bool], Message],
     common_ids: set[tuple[int, bool]],
+    ecu_map: dict[str, str] | None = None,
 ) -> float:
     scores: list[float] = []
     for frame_key in sorted(common_ids):
         old, new = old_by_id[frame_key], new_by_id[frame_key]
-        score = 0.20 * (old.dlc == new.dlc) + 0.15 * (old.transmitter == new.transmitter)
+        score = 0.20 * (old.dlc == new.dlc) + 0.15 * transmitters_match(old.transmitter, new.transmitter, ecu_map or {})
         score += 0.10 * (old.cycle_time_ms == new.cycle_time_ms) + 0.15 * (len(old.signals) == len(new.signals))
         score += 0.40 * jaccard(old.signal_layout(), new.signal_layout())
         scores.append(score)

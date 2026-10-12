@@ -17,26 +17,41 @@ class NoWheelComboBox(QComboBox):
 
 
 class DropLineEdit(QLineEdit):
-    """QLineEdit that accepts folder drag-and-drop."""
+    """QLineEdit that accepts the currently selected baseline input type."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.setAcceptDrops(True)
-        self.setPlaceholderText("Browse or drag & drop a folder here")
+        self.set_files_mode(False)
         # Without this the field demands room for the placeholder, which pushes
         # a horizontal scrollbar onto every layout it sits in.
         self.setMinimumWidth(160)
 
+    def set_files_mode(self, enabled: bool) -> None:
+        self._files_mode = enabled
+        kind = "DBC file" if enabled else "folder"
+        self.setPlaceholderText(f"Browse or drag & drop a {kind} here")
+
+    def _accepts_path(self, path: Path) -> bool:
+        if self._files_mode:
+            return path.is_file() and path.suffix.lower() == ".dbc"
+        return path.is_dir()
+
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
             url = event.mimeData().urls()[0]
-            if Path(url.toLocalFile()).is_dir():
+            if self._accepts_path(Path(url.toLocalFile())):
                 event.acceptProposedAction()
                 return
         event.ignore()
 
     def dropEvent(self, event) -> None:
+        if not event.mimeData().hasUrls():
+            event.ignore()
+            return
         path = Path(event.mimeData().urls()[0].toLocalFile())
-        if path.is_dir():
+        if self._accepts_path(path):
             self.setText(str(path))
             event.acceptProposedAction()
+        else:
+            event.ignore()

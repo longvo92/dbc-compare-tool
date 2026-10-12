@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 from dbc_compare_tool import __version__
 from dbc_compare_tool.core.comparator import DbcComparator, filter_result
 from dbc_compare_tool.core.discovery import collect_dbc_files
+from dbc_compare_tool.core.ecu import collect_ecu_nodes, validate_ecu_map
 from dbc_compare_tool.core.models import ComparisonResult
 from dbc_compare_tool.report.excel import default_report_path, write_excel_report
 from dbc_compare_tool.ui.widgets import DropLineEdit, NoWheelComboBox
@@ -264,19 +265,23 @@ class CompareWorker(QThread):
         new_folder: Path,
         pair_map: dict[str, str | None] | None = None,
         include_unchanged: bool = False,
+        ecu_map: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
         self.old_folder = old_folder
         self.new_folder = new_folder
         self.pair_map = pair_map
         self.include_unchanged = include_unchanged
+        self.ecu_map = dict(ecu_map or {})
 
     def run(self) -> None:
         try:
             self.log.emit("Discovering and parsing DBC files...")
-            comparator = DbcComparator(include_unchanged=self.include_unchanged)
+            comparator = DbcComparator(
+                include_unchanged=self.include_unchanged, ecu_map=self.ecu_map
+            )
             if self.pair_map is None:
-                result = comparator.compare_folders(
+                result = comparator.compare_paths(
                     self.old_folder,
                     self.new_folder,
                     progress_callback=lambda msg: self.log.emit(msg),
@@ -310,6 +315,91 @@ class ExportWorker(QThread):
             self.completed.emit(self.output_path, self.result.summary())
         except Exception as exc:
             self.failed.emit(str(exc))
+
+
+class EcuDiscoveryWorker(QThread):
+    loaded = Signal(object, object)
+    failed = Signal(str)
+
+    def __init__(self, old_path: Path, new_path: Path) -> None:
+        super().__init__()
+        self.old_path = old_path
+        self.new_path = new_path
+
+    def run(self) -> None:
+        try:
+            self.loaded.emit(collect_ecu_nodes(self.old_path), collect_ecu_nodes(self.new_path))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class EcuPairingDialog(QDialog):
+    """Pair renamed ECU nodes while retaining original routing in the report."""
+
+    def __init__(
+        self,
+        parent,
+        old_nodes: list[str],
+        new_nodes: list[str],
+        previous: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("ECU Node Pairing")
+        self.resize(680, 460)
+        self._pair_map: dict[str, str] = {}
+        self._old_nodes = set(old_nodes)
+        self._new_nodes = set(new_nodes)
+        layout = QVBoxLayout(self)
+        hint = QLabel(
+            "Choose the NEW node for each renamed OLD node. Leave other nodes at "
+            "Keep original name. Each target node can be used only once. "
+            "Pairing applies across the selected baselines; original names remain in the report."
+        )
+        hint.setObjectName("hintLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.table = QTableWidget(len(old_nodes), 2)
+        self.table.setHorizontalHeaderLabels(["OLD ECU Node", "NEW ECU Node"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        for row, old_node in enumerate(old_nodes):
+            self.table.setItem(row, 0, QTableWidgetItem(old_node))
+            combo = NoWheelComboBox()
+            combo.addItem("— Keep original name —", None)
+            for new_node in new_nodes:
+                combo.addItem(new_node, new_node)
+            if previous and previous.get(old_node) in new_nodes:
+                combo.setCurrentIndex(combo.findData(previous[old_node]))
+            self.table.setCellWidget(row, 1, combo)
+        layout.addWidget(self.table)
+        counts = QLabel(f"{len(old_nodes)} OLD node(s) · {len(new_nodes)} NEW node(s)")
+        counts.setObjectName("hintLabel")
+        layout.addWidget(counts)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._on_save)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _on_save(self) -> None:
+        pair_map: dict[str, str] = {}
+        for row in range(self.table.rowCount()):
+            old_node = self.table.item(row, 0).text()
+            new_node = self.table.cellWidget(row, 1).currentData()
+            if new_node is not None and new_node != old_node:
+                pair_map[old_node] = new_node
+        try:
+            validate_ecu_map(pair_map, self._old_nodes, self._new_nodes)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid ECU Pairing", str(exc))
+            return
+        self._pair_map = pair_map
+        self.accept()
+
+    def pair_map(self) -> dict[str, str]:
+        return dict(self._pair_map)
 
 
 class ManualPairingDialog(QDialog):
@@ -422,18 +512,24 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(720, 520)
         self.worker: CompareWorker | None = None
         self.export_worker: ExportWorker | None = None
+        self.ecu_worker: EcuDiscoveryWorker | None = None
         self._pending_output_path: Path | None = None
         self.last_report: Path | None = None
         self._settings = QSettings("DbcCompareTool", "DBCCompareTool")
 
         self.old_input = DropLineEdit()
         self.new_input = DropLineEdit()
+        self.input_mode = NoWheelComboBox()
+        self.input_mode.addItem("Folders", "folders")
+        self.input_mode.addItem("Files", "files")
+        self.input_mode.setAccessibleName("Input Type")
         self.output_input = QLineEdit()
         self.output_input.setPlaceholderText(
             "Automatic: beside New folder as compared_<folder>.xlsx"
         )
         self.run_button = QPushButton("Run Compare")
         self.manual_pair_button = QPushButton("Manual Pairing…")
+        self.ecu_pair_button = QPushButton("ECU Pairing…")
         self.open_button = QPushButton("Open Report")
         self.progress = QProgressBar()
         self.log_view = QTextEdit()
@@ -445,6 +541,9 @@ class MainWindow(QMainWindow):
         # inputs it was built for; invalidated when either folder changes.
         self._saved_pair_map: dict[str, str | None] | None = None
         self._saved_pair_folders: tuple[str, str] | None = None
+        self._saved_ecu_map: dict[str, str] = {}
+        self._saved_ecu_inputs: tuple[str, str, str] | None = None
+        self._ecu_load_inputs: tuple[str, str, str] | None = None
 
         # Filter checkboxes
         self.chk_added = QCheckBox("Added")
@@ -503,33 +602,39 @@ class MainWindow(QMainWindow):
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(8)
 
-        old_label = QLabel("Old Baseline Folder")
+        mode_label = QLabel("Input Type")
+        mode_label.setBuddy(self.input_mode)
+        form.addWidget(mode_label, 0, 0)
+        form.addWidget(self.input_mode, 0, 1)
+
+        old_label = self.old_label = QLabel("Old Baseline Folder")
         old_label.setBuddy(self.old_input)
         self.old_input.setAccessibleName("Old Baseline Folder")
-        form.addWidget(old_label, 0, 0)
-        form.addWidget(self.old_input, 0, 1)
+        form.addWidget(old_label, 1, 0)
+        form.addWidget(self.old_input, 1, 1)
         old_button = QPushButton("Browse")
         old_button.setAccessibleName("Browse old baseline folder")
-        old_button.clicked.connect(lambda: self._choose_folder(self.old_input))
-        form.addWidget(old_button, 0, 2)
+        old_button.clicked.connect(lambda: self._choose_baseline(self.old_input))
+        form.addWidget(old_button, 1, 2)
 
-        new_label = QLabel("New Baseline Folder")
+        new_label = self.new_label = QLabel("New Baseline Folder")
         new_label.setBuddy(self.new_input)
         self.new_input.setAccessibleName("New Baseline Folder")
-        form.addWidget(new_label, 1, 0)
-        form.addWidget(self.new_input, 1, 1)
+        form.addWidget(new_label, 2, 0)
+        form.addWidget(self.new_input, 2, 1)
         new_button = QPushButton("Browse")
         new_button.setAccessibleName("Browse new baseline folder")
-        new_button.clicked.connect(lambda: self._choose_folder(self.new_input))
-        form.addWidget(new_button, 1, 2)
+        new_button.clicked.connect(lambda: self._choose_baseline(self.new_input))
+        form.addWidget(new_button, 2, 2)
 
         pairing_row = QHBoxLayout()
-        pairing_hint = QLabel("Automatic pairing by default.")
+        pairing_hint = self.pairing_hint = QLabel("Automatic DBC pairing by default.")
         pairing_hint.setObjectName("hintLabel")
         pairing_hint.setWordWrap(True)
         pairing_row.addWidget(pairing_hint, 1)
         pairing_row.addWidget(self.manual_pair_button)
-        form.addLayout(pairing_row, 2, 0, 1, 3)
+        pairing_row.addWidget(self.ecu_pair_button)
+        form.addLayout(pairing_row, 3, 0, 1, 3)
         form.setColumnStretch(1, 1)
 
         report_group = QGroupBox("Report")
@@ -570,11 +675,15 @@ class MainWindow(QMainWindow):
         # Action buttons
         self.run_button.setObjectName("primaryButton")
         self.run_button.setToolTip(
-            "Compare the two baselines. Uses your saved manual pairing when it pairs every "
-            "old file; otherwise pairs files automatically by relative path and content similarity."
+            "Compare two DBC files directly in Files mode. In Folders mode, use saved manual "
+            "pairing when it pairs every old file; otherwise pair files automatically by "
+            "relative path and content similarity. Saved ECU pairing applies in either mode."
         )
         self.manual_pair_button.setToolTip(
             "Choose which new-baseline file each old-baseline file is compared against."
+        )
+        self.ecu_pair_button.setToolTip(
+            "Pair renamed ECU nodes to avoid routing changes caused only by node renaming."
         )
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
@@ -616,8 +725,8 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         focus_order = (
-            self.old_input, old_button, self.new_input, new_button,
-            self.manual_pair_button, self.output_input, output_button,
+            self.input_mode, self.old_input, old_button, self.new_input, new_button,
+            self.manual_pair_button, self.ecu_pair_button, self.output_input, output_button,
             self.chk_include_unchanged, self.chk_added, self.chk_removed,
             self.chk_modified, self.chk_renamed, self.run_button, self.open_button,
         )
@@ -628,6 +737,8 @@ class MainWindow(QMainWindow):
         self.chk_include_unchanged.toggled.connect(self._update_change_filters)
         self.run_button.clicked.connect(self._run_compare)
         self.manual_pair_button.clicked.connect(self._open_manual_pairing)
+        self.ecu_pair_button.clicked.connect(self._open_ecu_pairing)
+        self.input_mode.currentIndexChanged.connect(self._on_input_mode_changed)
         self.open_button.clicked.connect(self._open_report)
         self.old_input.textChanged.connect(self._invalidate_saved_pairing)
         self.new_input.textChanged.connect(self._invalidate_saved_pairing)
@@ -636,14 +747,51 @@ class MainWindow(QMainWindow):
     def _current_folder_inputs(self) -> tuple[str, str]:
         return (self.old_input.text().strip(), self.new_input.text().strip())
 
+    def _current_inputs(self) -> tuple[str, str, str]:
+        return (*self._current_folder_inputs(), self.input_mode.currentData())
+
+    def _files_mode(self) -> bool:
+        return self.input_mode.currentData() == "files"
+
+    def _on_input_mode_changed(self) -> None:
+        self._clear_saved_pairing()
+        kind = "DBC" if self._files_mode() else "Folder"
+        self.old_label.setText(f"Old Baseline {kind}")
+        self.new_label.setText(f"New Baseline {kind}")
+        self.old_input.setAccessibleName(self.old_label.text())
+        self.new_input.setAccessibleName(self.new_label.text())
+        for field in (self.old_input, self.new_input):
+            field.set_files_mode(self._files_mode())
+        for side, button in zip(("old", "new"), self._browse_buttons[:2]):
+            button.setAccessibleName(f"Browse {side} baseline {kind.lower()}")
+        self.manual_pair_button.setEnabled(self.run_button.isEnabled() and not self._files_mode())
+        self.pairing_hint.setText(
+            "The selected DBC files are compared directly."
+            if self._files_mode() else "Automatic DBC pairing by default."
+        )
+        self._update_output_hint()
+
+    def _clear_saved_pairing(self) -> None:
+        had_pairing = self._saved_pair_map is not None or bool(self._saved_ecu_map)
+        self._saved_pair_map = None
+        self._saved_pair_folders = None
+        self._saved_ecu_map = {}
+        self._saved_ecu_inputs = None
+        if had_pairing:
+            self._log("Baseline input changed — saved DBC and ECU pairing discarded.")
+
     def _invalidate_saved_pairing(self) -> None:
-        if self._saved_pair_folders and self._saved_pair_folders != self._current_folder_inputs():
-            self._saved_pair_map = None
-            self._saved_pair_folders = None
-            self._log("Baseline folder changed — saved manual pairing discarded.")
+        if (
+            self._saved_pair_folders and self._saved_pair_folders != self._current_folder_inputs()
+        ) or (
+            self._saved_ecu_inputs and self._saved_ecu_inputs != self._current_inputs()
+        ):
+            self._clear_saved_pairing()
 
     def _open_manual_pairing(self) -> bool:
         """Open the pairing dialog; returns True if a pairing was saved."""
+        if self._files_mode():
+            return False
         old_text, new_text = self._current_folder_inputs()
         # Guard empty text explicitly: Path("") is ".", which is_dir() accepts.
         if not old_text or not new_text or not Path(old_text).is_dir() or not Path(new_text).is_dir():
@@ -677,12 +825,72 @@ class MainWindow(QMainWindow):
             )
         return True
 
-    def _choose_folder(self, target: QLineEdit) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Select Baseline Folder")
-        if folder:
+    def _validated_baselines(self) -> tuple[Path, Path] | None:
+        old_text, new_text = self._current_folder_inputs()
+        paths = (Path(old_text), Path(new_text))
+        if self._files_mode():
+            valid = all(path.is_file() and path.suffix.lower() == ".dbc" for path in paths)
+            expected = "DBC files"
+        else:
+            valid = all(path.is_dir() for path in paths)
+            expected = "baseline folders"
+        # Empty text must not be accepted as Path(""), which points to cwd.
+        if not old_text or not new_text or not valid:
+            QMessageBox.warning(self, "Invalid Input", f"Select valid old and new {expected}.")
+            return None
+        return paths
+
+    def _open_ecu_pairing(self) -> None:
+        paths = self._validated_baselines()
+        if paths is None:
+            return
+        self._ecu_load_inputs = self._current_inputs()
+        self._set_actions_enabled(False)
+        self.open_button.setEnabled(False)
+        self.progress.setRange(0, 0)
+        self.run_status.setText("Loading ECU nodes…")
+        self.ecu_worker = EcuDiscoveryWorker(*paths)
+        self.ecu_worker.loaded.connect(self._on_ecu_nodes_loaded)
+        self.ecu_worker.failed.connect(self._ecu_load_failed)
+        self.ecu_worker.start()
+
+    def _finish_ecu_loading(self) -> None:
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self._set_actions_enabled(True)
+        self.open_button.setEnabled(self.last_report is not None)
+        self.run_status.setText("Ready to compare")
+
+    def _on_ecu_nodes_loaded(self, old_nodes: list[str], new_nodes: list[str]) -> None:
+        if self._ecu_load_inputs != self._current_inputs():
+            self._finish_ecu_loading()
+            return
+        previous = (
+            self._saved_ecu_map if self._saved_ecu_inputs == self._current_inputs() else None
+        )
+        dialog = EcuPairingDialog(self, old_nodes, new_nodes, previous=previous)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._saved_ecu_map = dialog.pair_map()
+            self._saved_ecu_inputs = self._current_inputs()
+            self._log(f"ECU pairing saved: {len(self._saved_ecu_map)} renamed node pair(s).")
+        self._finish_ecu_loading()
+
+    def _ecu_load_failed(self, message: str) -> None:
+        self._finish_ecu_loading()
+        self._log(f"Unable to load ECU nodes: {message}")
+        QMessageBox.critical(self, "ECU Load Failed", message)
+
+    def _choose_baseline(self, target: QLineEdit) -> None:
+        if self._files_mode():
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Select Baseline DBC", target.text().strip(), "DBC files (*.dbc)"
+            )
+        else:
+            path = QFileDialog.getExistingDirectory(self, "Select Baseline Folder")
+        if path:
             # Qt hands back forward slashes; normalize to the native separator so
             # every path field reads the same way.
-            target.setText(str(Path(folder)))
+            target.setText(str(Path(path)))
 
     def _choose_report(self) -> None:
         suggested_path = self.output_input.text().strip()
@@ -705,7 +913,8 @@ class MainWindow(QMainWindow):
             self.output_input.setPlaceholderText(f"Automatic: {automatic}")
         else:
             self.output_input.setPlaceholderText(
-                "Automatic: beside New folder as compared_<folder>.xlsx"
+                "Automatic: beside New DBC as compared_<file>.xlsx"
+                if self._files_mode() else "Automatic: beside New folder as compared_<folder>.xlsx"
             )
 
     def _selected_change_types(self) -> set[str]:
@@ -726,7 +935,8 @@ class MainWindow(QMainWindow):
         built for other folders, is ignored so the run falls back to auto."""
         pair_map = self._saved_pair_map
         if (
-            pair_map
+            not self._files_mode()
+            and pair_map
             and self._saved_pair_folders == self._current_folder_inputs()
             and all(new_rel is not None for new_rel in pair_map.values())
         ):
@@ -739,13 +949,12 @@ class MainWindow(QMainWindow):
         self._start_compare(pair_map=pair_map)
 
     def _start_compare(self, pair_map: dict[str, str | None] | None) -> None:
-        old_text, new_text = self._current_folder_inputs()
-        # Guard empty text explicitly: Path("") is ".", which is_dir() accepts.
-        if not old_text or not new_text or not Path(old_text).is_dir() or not Path(new_text).is_dir():
-            QMessageBox.warning(self, "Invalid Input", "Select valid old and new baseline folders.")
+        paths = self._validated_baselines()
+        if paths is None:
             return
-        old_folder = Path(old_text)
-        new_folder = Path(new_text)
+        old_folder, new_folder = paths
+        if self._files_mode():
+            pair_map = None
         output_text = self.output_input.text().strip()
         output_path = Path(output_text) if output_text else default_report_path(new_folder)
         if output_path.suffix.lower() != ".xlsx":
@@ -759,9 +968,15 @@ class MainWindow(QMainWindow):
 
         self._pending_output_path = output_path
         self.log_view.clear()
-        pairing = "manual pairing" if pair_map is not None else "auto pairing"
+        pairing = (
+            "direct file comparison" if self._files_mode()
+            else "manual pairing" if pair_map is not None else "auto pairing"
+        )
+        ecu_map = self._saved_ecu_map if self._saved_ecu_inputs == self._current_inputs() else {}
         mode = ", include unchanged" if self.chk_include_unchanged.isChecked() else ", changes only"
         self._log(f"Starting comparison ({pairing}{mode})...")
+        if ecu_map:
+            self._log(f"Using {len(ecu_map)} ECU node pair(s).")
         self.progress.setRange(0, 0)
         self.run_status.setText("Comparing baselines…")
         self._set_actions_enabled(False)
@@ -769,6 +984,7 @@ class MainWindow(QMainWindow):
         self.worker = CompareWorker(
             old_folder, new_folder, pair_map,
             include_unchanged=self.chk_include_unchanged.isChecked(),
+            ecu_map=ecu_map,
         )
         self.worker.log.connect(self._log)
         self.worker.compared.connect(self._on_compared)
@@ -777,7 +993,9 @@ class MainWindow(QMainWindow):
 
     def _set_actions_enabled(self, enabled: bool) -> None:
         self.run_button.setEnabled(enabled)
-        self.manual_pair_button.setEnabled(enabled)
+        self.manual_pair_button.setEnabled(enabled and not self._files_mode())
+        self.ecu_pair_button.setEnabled(enabled)
+        self.input_mode.setEnabled(enabled)
         self.chk_include_unchanged.setEnabled(enabled)
         for control in (self.old_input, self.new_input, self.output_input, *self._browse_buttons):
             control.setEnabled(enabled)
@@ -801,6 +1019,8 @@ class MainWindow(QMainWindow):
     def _restore_paths(self) -> None:
         # Older sessions may have stored forward-slash paths; normalize on load
         # so all three fields use the native separator.
+        mode_index = self.input_mode.findData(self._settings.value("input_mode", "folders"))
+        self.input_mode.setCurrentIndex(max(0, mode_index))
         if val := self._settings.value("last_old_folder"):
             self.old_input.setText(str(Path(str(val))))
         if val := self._settings.value("last_new_folder"):
@@ -812,6 +1032,7 @@ class MainWindow(QMainWindow):
             self.output_input.setText(str(Path(str(val))))
 
     def _save_paths(self) -> None:
+        self._settings.setValue("input_mode", self.input_mode.currentData())
         self._settings.setValue("last_old_folder", self.old_input.text())
         self._settings.setValue("last_new_folder", self.new_input.text())
         self._settings.setValue("last_report_path", self.output_input.text())
@@ -847,7 +1068,9 @@ class MainWindow(QMainWindow):
             )
 
     def closeEvent(self, event) -> None:
-        running = [w for w in (self.worker, self.export_worker) if w and w.isRunning()]
+        running = [
+            w for w in (self.worker, self.export_worker, self.ecu_worker) if w and w.isRunning()
+        ]
         if running:
             reply = QMessageBox.question(
                 self,
