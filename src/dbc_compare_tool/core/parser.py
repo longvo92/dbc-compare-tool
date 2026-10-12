@@ -30,7 +30,10 @@ def parse_dbc(path: Path) -> DbcDatabase:
     except (UnicodeDecodeError, ValueError) as exc:
         raise DbcParseError(f"Unable to parse DBC file: {path}: {exc}") from exc
 
-    database = DbcDatabase(path=path)
+    database = DbcDatabase(
+        path=path,
+        nodes=tuple(sorted(node.name for node in getattr(cantools_db, "nodes", []) or [])),
+    )
     for cantools_message in getattr(cantools_db, "messages", []):
         message = _map_message(cantools_message)
         database.messages[message.name] = message

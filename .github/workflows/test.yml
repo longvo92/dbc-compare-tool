@@ -31,3 +31,18 @@ jobs:
         run: |
           python -m dbc_compare_tool.cli --old examples/old --new examples/new --out report.xlsx
           python -m dbc_compare_tool.cli --old examples/old --new examples/new --include-unchanged --out impact_review.xlsx
+          python -m dbc_compare_tool.cli --old examples/old/Bus_A.dbc --new examples/new/Bus_A.dbc --out files.xlsx
+
+  gui:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install GUI dependencies
+        run: python -m pip install -e .
+      - name: Exercise GUI input and ECU pairing
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest tests.test_ui_inputs -v

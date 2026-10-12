@@ -12,11 +12,14 @@ This project is a local Windows desktop application for automotive engineers com
    - Keeps parsed output in small dataclasses.
 
 2. Comparison Engine
-   - Discovers `.dbc` files in old and new baseline folders.
+   - `compare_paths` accepts two folders or two `.dbc` files; mixed inputs are rejected. `compare_files` treats the selected files as an explicit pair regardless of names or content.
+   - Discovers `.dbc` files recursively for folder inputs.
    - Compares files with the same relative path first.
    - Pairs old-only and new-only `.dbc` files using inventory-weighted keywords and content, then solves a maximum-score one-to-one assignment (`core/pairing.py`).
    - Matches messages by frame key first; still-unmatched messages run through structural rename detection before being treated as added/removed.
-   - Compares value tables and comments as regular properties, surfaced in change descriptions and the Property Diff sheet.
+   - Compares value tables and comments as regular properties, surfaced in the Changed Properties sheet.
+   - `DbcComparator(ecu_map={old_node: new_node})` pairs renamed ECU identities for Tx/Rx comparison and file/message/signal rename scoring. Original models remain unchanged for report context and displayed property values. Node discovery includes declared nodes and routing references, excluding the undefined-node placeholder.
+   - ECU mappings must be one-to-one, reference nodes present in their selected inputs and avoid collisions with unmapped OLD nodes. The result records the mapping; filtering preserves it.
    - `DbcComparator(include_unchanged=True)` retains exact matches as `Unchanged`; default results remain changes only. Each detail entry carries OLD/NEW parent message and signal references for report context. Unchanged counts are excluded from `Total Changes`.
    - Accepts a caller-supplied pairing map (`compare_manual`) as an alternative to automatic file pairing.
    - `filter_result` retains requested change types and always preserves file pairs. Include Unchanged bypasses filtering.
@@ -30,19 +33,19 @@ This project is a local Windows desktop application for automotive engineers com
 4. Report Generator
    - Writes a single Excel workbook; shared styling lives in `report/_style.py`.
    - Five sheets in order: `Summary`, `DBC Overview`, `Message Details`, `Signal Details`, and
-     `Property Diff`.
-   - Appends separate OLD/NEW Tx/Rx, frame IDs and technical properties; message Rx aggregates signal receivers. Summary records report mode and skipped parse-error count. Property Diff remains a table of changed properties only.
+     `Changed Properties`.
+   - Detail sheets retain identity, OLD/NEW Tx/Rx, frame IDs, confidence and match reasons. They omit technical property snapshots and repeated diff descriptions. Message Rx aggregates signal receivers. Summary records report mode, skipped parse-error count and selected ECU mappings. Changed Properties contains only actual property deltas.
 
 5. UI Layer
    - PySide6 desktop UI with an application-wide stylesheet.
-   - Groups folder inputs/manual pairing under Baselines and output/export options under Report. The footer exposes compare/export/completion/failure states and keeps Run Compare and Open Report visible. Input controls and filters are locked during comparison/export.
-   - The folder-to-folder Baseline Compare workflow, with its own Execution Log (`log_view`, cleared
+   - Groups input type (Folders/Files), paths, manual DBC pairing and ECU pairing under Baselines, with output/export options under Report. Manual DBC pairing is disabled for direct files. Changing paths or mode invalidates saved file and ECU maps. The footer keeps Run Compare and Open Report visible. Inputs are locked while workers run.
+   - The Baseline Compare workflow has its own Execution Log (`log_view`, cleared
      at the start of every run).
    - The controls sit in a `QScrollArea` so a small window scrolls instead of squeezing every
      group until its content is unreadable, and the primary action stays outside that scroll area so
      it is always reachable.
    - Runs comparison, pairing, and export on worker threads to keep the UI responsive.
-   - Persists last-used folder paths and the report path via
+   - Persists input type, last-used input paths and the report path via
      `QSettings("DbcCompareTool", "DBCCompareTool")` (Windows registry).
    - Help > Changelog renders `CHANGELOG.md`. That file lives at the repository root, which no build
      ships, so `scripts/build.py` copies it in beside the other resources and `_changelog_path()`
@@ -50,16 +53,16 @@ This project is a local Windows desktop application for automotive engineers com
 
 The dependency direction is one-way: `ui` and `cli` both import `core` and `report`, and nothing
 under `core` or `report` imports either of them. That is what lets CI run the full comparison with
-`cantools` and `openpyxl` installed but no `PySide6` — and it is why no test imports Qt.
+`cantools` and `openpyxl` installed but no `PySide6`. GUI tests skip when Qt is unavailable; a separate Windows CI job runs them with Qt installed.
 
 ## Entry Points
 
 | Entry point | Module | Notes |
 |---|---|---|
 | `dbc-compare-tool-gui`, `python -m dbc_compare_tool` | `ui/main_window.py` | Desktop app; `__main__.py` forwards to the UI |
-| `dbc-compare-tool`, `python -m dbc_compare_tool.cli` | `cli.py` | `--old`, `--new` required; `--out` optional; `--include-unchanged` exports unchanged entries too; exit `0` ok, `1` write failure, `2` bad arguments |
+| `dbc-compare-tool`, `python -m dbc_compare_tool.cli` | `cli.py` | `--old`, `--new` require two folders or two files; optional `--out`, `--include-unchanged`, repeated `--ecu-pair OLD=NEW`; exit `0` ok, `1` parse/write failure, `2` invalid inputs/mappings |
 
-The CLI uses automatic DBC pairing. The GUI also offers manual DBC pairing; both flows export directly and automatically detect message/signal renames.
+For folders, the CLI uses automatic DBC pairing and the GUI also offers manual pairing. Both interfaces accept direct file pairs and ECU node mappings, export directly and automatically detect message/signal renames.
 
 ## Build and Release
 
@@ -72,7 +75,7 @@ Two workflows, deliberately split by who triggers them:
 
 - `.github/workflows/test.yml` runs on every push and pull request to `main`: the suite plus a CLI
   comparison of the bundled examples, on Linux and Windows against Python 3.9, 3.10 and 3.12. It installs
-  `cantools` and `openpyxl` only, which is what keeps the no-Qt rule honest.
+  `cantools` and `openpyxl` only, which is what keeps the no-Qt rule honest. A separate Windows/Python 3.12 job installs the GUI dependencies and runs `test_ui_inputs`.
 - `.github/workflows/release.yml` is `workflow_dispatch` only and refuses to run off `main`. It
   reads; it never writes to the repository. The default run is a rehearsal — build both artifacts,
   **start** both of them, upload, stop — and publishing takes an explicit `publish=true`. Starting
@@ -86,6 +89,8 @@ Two workflows, deliberately split by who triggers them:
 
 ```mermaid
 flowchart TD
+    F[old + new DBC files] --> FP[parse explicit file pair]
+    FP --> D
     A[old + new baseline folders] --> B[discovery.discover_dbc_pairs<br/>rglob, case-insensitive .dbc]
     B --> C{same relative path?}
     C -->|yes| P1[parse both files]
@@ -102,7 +107,7 @@ flowchart TD
     I --> J
     J --> K[match signals by exact name]
     K -->|leftover| L[SignalRenameDetector<br/>0.82, or 0.65 when event-like]
-    L --> M[ComparisonResult<br/>message_changes, signal_changes, file_pairs]
+    L --> M[ComparisonResult<br/>message_changes, signal_changes, file_pairs, ecu_map]
     J --> M
     U --> M
     X --> M
@@ -113,7 +118,7 @@ flowchart TD
 Two details of that flow are easy to miss. An added or removed `.dbc` still goes through
 `compare_databases`, paired against an empty `DbcDatabase`, which is how all of its messages and
 signals reach the detail sheets instead of only the overview row. And a parse failure is contained
-per file: the file becomes a `Parse Error` row in `file_pairs` and every other file is still compared.
+per file in folder mode: the file becomes a `Parse Error` row in `file_pairs` and every other file is still compared. Direct file parse errors stop the run; there is no other pair to continue with. ECU discovery skips unreadable files in folder mode, matching the comparison's partial-report behavior.
 
 ## Rename Strategy
 
@@ -236,16 +241,19 @@ What that field testing did **not** cover yet — these remain unvalidated outsi
 
 ### What the suite covers
 
-One test module per layer, `unittest` only, no Qt import anywhere in `tests/`:
+Tests use `unittest`; GUI tests are optional when Qt is not installed:
 
 | Module | Layer |
 |---|---|
 | `test_parser.py` | Parsing, including byte order and value type against a mixed-endian fixture |
 | `test_comparator.py`, `test_message_rename.py`, `test_rename.py` | Comparison and rename scoring |
+| `test_file_inputs.py`, `test_ecu_pairing.py` | Direct file inputs, CLI mapping validation, mapped routing identities and rename scoring |
 | `test_manual_pairing.py`, `test_dbc_pairing.py` | Manual DBC pairing, keyword scoring, global assignment and report evidence |
 | `test_value_and_comment.py` | `VAL_` and `CM_` comparison |
 | `test_robustness.py` | Frame-key collisions, parse-error resilience, discovery, encodings |
 | `test_report.py` | The Excel writer, written to disk and read back with openpyxl |
+| `test_impact_report.py` | Full inventory, ECU context, compact detail sheets and changed-property output |
+| `test_ui_inputs.py` | File/folder input modes, ECU pairing, saved-state invalidation and comparison workers |
 | `test_release_check.py` | The release gate, including against the real project files |
 
 The suite was checked by mutation rather than by coverage percentage: 26 deliberate defects were
@@ -257,7 +265,7 @@ with the suite still green, which a release build would then have shipped.
 
 - `BA_` attributes other than `GenMsgCycleTime` are not read at all, so a project that encodes
   meaning in custom attributes will see no diff for them. Surfacing one means extending the parser,
-  the models, and the Property Diff sheet.
+  the models, and the Changed Properties sheet.
 - CAN FD handling may still need project-specific interpretation — see the table above.
 - The rename thresholds are a deliberate trade-off: at 0.60, `MessageRenameDetector` favours missing
   a CAN-ID-changed rename (reported as Removed + Added) over inventing a wrong one. Field use has not

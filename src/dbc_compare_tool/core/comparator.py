@@ -7,7 +7,15 @@ from dataclasses import replace
 from pathlib import Path
 
 from dbc_compare_tool.core.discovery import collect_dbc_files, discover_dbc_pairs
-from dbc_compare_tool.core.models import Change, ComparisonResult, DbcDatabase, FilePairSummary, Message
+from dbc_compare_tool.core.ecu import (
+    collect_ecu_nodes,
+    database_ecu_nodes,
+    receivers_match,
+    transmitters_match,
+    validate_dbc_input,
+    validate_ecu_map,
+)
+from dbc_compare_tool.core.models import Change, ComparisonResult, DbcDatabase, FilePairSummary, Message, Signal
 from dbc_compare_tool.core.pairing import DatabaseCandidate, match_renamed_databases
 from dbc_compare_tool.core.parser import DbcParseError, parse_dbc
 from dbc_compare_tool.core.rename import EventMessageDetector, MessageRenameDetector, SignalRenameDetector
@@ -44,8 +52,85 @@ PROPERTY_LABELS = {
 
 
 class DbcComparator:
-    def __init__(self, include_unchanged: bool = False) -> None:
+    def __init__(self, include_unchanged: bool = False, ecu_map: dict[str, str] | None = None) -> None:
         self.include_unchanged = include_unchanged
+        self.ecu_map = dict(ecu_map or {})
+        validate_ecu_map(self.ecu_map)
+
+    def compare_paths(
+        self,
+        old_path: Path,
+        new_path: Path,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> ComparisonResult:
+        """Compare two folders or explicitly pair two selected DBC files."""
+        old_path, new_path = Path(old_path), Path(new_path)
+        validate_dbc_input(old_path)
+        validate_dbc_input(new_path)
+        if old_path.is_dir() != new_path.is_dir():
+            raise ValueError("Select two folders or two .dbc files; file/folder inputs cannot be mixed")
+        if old_path.is_dir():
+            return self.compare_folders(old_path, new_path, progress_callback)
+        return self.compare_files(old_path, new_path, progress_callback)
+
+    def compare_files(
+        self,
+        old_path: Path,
+        new_path: Path,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> ComparisonResult:
+        """Force the selected files into one pair regardless of their names/content."""
+        old_path, new_path = Path(old_path), Path(new_path)
+        for path in (old_path, new_path):
+            validate_dbc_input(path)
+            if not path.is_file():
+                raise ValueError(f"Direct file comparison requires a .dbc file: {path}")
+        old_db, new_db = parse_dbc(old_path), parse_dbc(new_path)
+        label = _format_file_pair_label(old_path.name, new_path.name)
+        if progress_callback:
+            progress_callback(f"[1/1] Comparing selected files: {label}")
+        result = self.compare_databases(label, old_db, new_db)
+        result.file_pairs.append(_file_pair_summary(
+            label=label,
+            status="Matched" if old_path.name == new_path.name else "Manually Paired",
+            old_path=str(old_path.resolve()),
+            new_path=str(new_path.resolve()),
+            pairing_reasons=("Explicit file selection",),
+            old_db=old_db,
+            new_db=new_db,
+        ))
+        return result
+
+    def _validate_folder_ecu_map(self, old_folder: Path, new_folder: Path) -> None:
+        if self.ecu_map:
+            validate_ecu_map(
+                self.ecu_map, set(collect_ecu_nodes(old_folder)), set(collect_ecu_nodes(new_folder)),
+            )
+
+    def _property_changes(
+        self, old: Message | Signal, new: Message | Signal,
+    ) -> tuple[str, tuple[tuple[str, str, str], ...]]:
+        """Compare mapped identities, displaying the original values for actual deltas."""
+        old_properties, new_properties = old.comparable_properties(), new.comparable_properties()
+        changed_keys = {
+            key for key in old_properties.keys() | new_properties.keys()
+            if old_properties.get(key) != new_properties.get(key)
+        }
+        if self.ecu_map:
+            if isinstance(old, Message) and isinstance(new, Message):
+                key = "Transmitter"
+                equivalent = transmitters_match(old.transmitter, new.transmitter, self.ecu_map)
+            else:
+                key = "Receivers"
+                equivalent = receivers_match(old.receivers, new.receivers, self.ecu_map)
+            if equivalent:
+                changed_keys.discard(key)
+            else:
+                changed_keys.add(key)
+        return (
+            _changed_properties(old_properties, new_properties, changed_keys),
+            _get_property_diffs(old_properties, new_properties, changed_keys),
+        )
 
     def compare_folders(
         self,
@@ -53,7 +138,8 @@ class DbcComparator:
         new_folder: Path,
         progress_callback: Callable[[str], None] | None = None,
     ) -> ComparisonResult:
-        result = ComparisonResult(include_unchanged=self.include_unchanged)
+        self._validate_folder_ecu_map(old_folder, new_folder)
+        result = ComparisonResult(include_unchanged=self.include_unchanged, ecu_map=dict(self.ecu_map))
         old_only: list[DatabaseCandidate] = []
         new_only: list[DatabaseCandidate] = []
 
@@ -90,7 +176,7 @@ class DbcComparator:
                     new_path=pair.relative_path if pair.new_path else "",
                 ))
 
-        file_matches = match_renamed_databases(old_only, new_only)
+        file_matches = match_renamed_databases(old_only, new_only, self.ecu_map)
         matched_old = {match.old.relative_path for match in file_matches}
         matched_new = {match.new.relative_path for match in file_matches}
 
@@ -162,7 +248,8 @@ class DbcComparator:
         referenced by any pair are reported as added. Each new file may be
         paired with at most one old file.
         """
-        result = ComparisonResult(include_unchanged=self.include_unchanged)
+        self._validate_folder_ecu_map(old_folder, new_folder)
+        result = ComparisonResult(include_unchanged=self.include_unchanged, ecu_map=dict(self.ecu_map))
         old_files = collect_dbc_files(old_folder)
         new_files = collect_dbc_files(new_folder)
 
@@ -268,7 +355,10 @@ class DbcComparator:
         new_db: DbcDatabase,
         result: ComparisonResult | None = None,
     ) -> ComparisonResult:
-        result = result or ComparisonResult()
+        if result is None:
+            validate_ecu_map(self.ecu_map, database_ecu_nodes(old_db), database_ecu_nodes(new_db))
+            result = ComparisonResult()
+        result.ecu_map = dict(self.ecu_map)
         result.include_unchanged = result.include_unchanged or self.include_unchanged
         message_start = len(result.message_changes)
 
@@ -278,8 +368,7 @@ class DbcComparator:
         for frame_id in sorted(set(old_by_id) & set(new_by_id)):
             old_message = old_by_id[frame_id]
             new_message = new_by_id[frame_id]
-            old_properties = old_message.comparable_properties()
-            new_properties = new_message.comparable_properties()
+            description, property_diffs = self._property_changes(old_message, new_message)
             if old_message.name != new_message.name:
                 result.message_changes.append(
                     Change(
@@ -289,15 +378,14 @@ class DbcComparator:
                         new_name=new_message.name,
                         confidence=1.0,
                         description=_with_match_reasons(
-                            _changed_properties(old_properties, new_properties),
+                            description,
                             ("Identical CAN ID",),
                         ),
                         can_id=new_message.can_id,
-                        property_diffs=_get_property_diffs(old_properties, new_properties),
+                        property_diffs=property_diffs,
                     )
                 )
             else:
-                description = _changed_properties(old_properties, new_properties)
                 if description or self.include_unchanged:
                     result.message_changes.append(
                         Change(
@@ -308,7 +396,7 @@ class DbcComparator:
                             confidence=None,
                             description=description or "Message properties unchanged",
                             can_id=new_message.can_id,
-                            property_diffs=_get_property_diffs(old_properties, new_properties),
+                            property_diffs=property_diffs,
                         )
                     )
             self._compare_signals(dbc_file, old_message, new_message, result)
@@ -318,7 +406,7 @@ class DbcComparator:
         unmatched_old_msgs = [old_by_id[fid] for fid in old_only_ids]
         unmatched_new_msgs = [new_by_id[fid] for fid in new_only_ids]
 
-        detector = MessageRenameDetector()
+        detector = MessageRenameDetector(ecu_map=self.ecu_map)
         rename_matches = detector.match(unmatched_old_msgs, unmatched_new_msgs)
 
         matched_old_ids = {_frame_key(match.old) for match in rename_matches}
@@ -327,8 +415,7 @@ class DbcComparator:
         for match in rename_matches:
             old_message = match.old
             new_message = match.new
-            old_properties = old_message.comparable_properties()
-            new_properties = new_message.comparable_properties()
+            description, property_diffs = self._property_changes(old_message, new_message)
             result.message_changes.append(
                 Change(
                     dbc_file=dbc_file,
@@ -338,11 +425,11 @@ class DbcComparator:
                     confidence=match.confidence,
                     confidence_level=match.confidence_level,
                     description=_with_match_reasons(
-                        _changed_properties(old_properties, new_properties),
+                        description,
                         match.reasons,
                     ),
                     can_id=new_message.can_id,
-                    property_diffs=_get_property_diffs(old_properties, new_properties),
+                    property_diffs=property_diffs,
                 )
             )
             self._compare_signals(dbc_file, old_message, new_message, result)
@@ -390,16 +477,14 @@ class DbcComparator:
         for name in common_names:
             old_signal = old_message.signals[name]
             new_signal = new_message.signals[name]
-            old_properties = old_signal.comparable_properties()
-            new_properties = new_signal.comparable_properties()
-            description = _changed_properties(old_properties, new_properties)
+            description, property_diffs = self._property_changes(old_signal, new_signal)
             if description or self.include_unchanged:
                 result.signal_changes.append(
                     Change(
                         dbc_file, "Modified" if description else "Unchanged", name, name,
                         None, description or "Signal properties unchanged",
                         parent_message=parent_name,
-                        property_diffs=_get_property_diffs(old_properties, new_properties),
+                        property_diffs=property_diffs,
                     )
                 )
 
@@ -408,14 +493,13 @@ class DbcComparator:
 
         # Detect if this is an event-like message and create appropriate detector
         is_event_like = EventMessageDetector.is_event_like(old_message) or EventMessageDetector.is_event_like(new_message)
-        signal_detector = SignalRenameDetector(is_event_like=is_event_like)
+        signal_detector = SignalRenameDetector(is_event_like=is_event_like, ecu_map=self.ecu_map)
         rename_matches = signal_detector.match(unmatched_old, unmatched_new)
 
         for match in rename_matches:
             old_signal = match.old
             new_signal = match.new
-            old_properties = old_signal.comparable_properties()
-            new_properties = new_signal.comparable_properties()
+            description, property_diffs = self._property_changes(old_signal, new_signal)
             result.signal_changes.append(
                 Change(
                     dbc_file=dbc_file,
@@ -426,10 +510,10 @@ class DbcComparator:
                     confidence=match.confidence,
                     confidence_level=match.confidence_level,
                     description=_with_match_reasons(
-                        _changed_properties(old_properties, new_properties),
+                        description,
                         match.reasons,
                     ),
-                    property_diffs=_get_property_diffs(old_properties, new_properties),
+                    property_diffs=property_diffs,
                 )
             )
             matched_old.add(old_signal.name)
@@ -506,13 +590,15 @@ def filter_result(result: ComparisonResult, selected_types: set[str]) -> Compari
         signal_changes=[c for c in result.signal_changes if c.change_type in selected_types],
         file_pairs=result.file_pairs,
         include_unchanged=result.include_unchanged,
+        ecu_map=dict(result.ecu_map),
     )
 
 
 def _get_property_diffs(
-    old: dict[str, object], new: dict[str, object]
+    old: dict[str, object], new: dict[str, object], changed_keys: set[str] | None = None,
 ) -> tuple[tuple[str, str, str], ...]:
-    changed_keys = {key for key in set(old) | set(new) if old.get(key) != new.get(key)}
+    if changed_keys is None:
+        changed_keys = {key for key in set(old) | set(new) if old.get(key) != new.get(key)}
     diffs: list[tuple[str, str, str]] = []
     for key in _ordered_changed_keys(changed_keys):
         label = PROPERTY_LABELS.get(key, key)
@@ -520,8 +606,11 @@ def _get_property_diffs(
     return tuple(diffs)
 
 
-def _changed_properties(old: dict[str, object], new: dict[str, object]) -> str:
-    changed_keys = {key for key in set(old) | set(new) if old.get(key) != new.get(key)}
+def _changed_properties(
+    old: dict[str, object], new: dict[str, object], changed_keys: set[str] | None = None,
+) -> str:
+    if changed_keys is None:
+        changed_keys = {key for key in set(old) | set(new) if old.get(key) != new.get(key)}
     if not changed_keys:
         return ""
 
