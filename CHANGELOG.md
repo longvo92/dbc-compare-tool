@@ -15,6 +15,7 @@ for the procedure.
 ### Fixed
 
 - Detect bulk signal renames with unchanged properties even when the parent message is renamed, including overlapping multiplexed signals and event-like messages with unique complete-property matches.
+- Isolate Windows packaging from unrelated DLLs on PATH to prevent QtCore startup failures caused by conflicting ICU libraries.
 
 ### Changed
 

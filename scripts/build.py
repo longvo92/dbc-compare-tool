@@ -12,6 +12,7 @@ Outputs go to dist/:
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -121,7 +122,14 @@ def build_exe(version: str) -> Path:
         str(build_dir),
         str(SRC_PKG / "__main__.py"),
     ]
-    subprocess.run(cmd, check=True, cwd=REPO_ROOT)
+    env = os.environ.copy()
+    if sys.platform == "win32":
+        # Do not collect unrelated DLLs from development-tool PATH entries.
+        # For example, Poppler's icuuc.dll lacks the Windows ICU exports Qt uses.
+        # PyInstaller's hooks add package-specific Qt DLL directories separately.
+        windows = Path(env.get("SystemRoot", r"C:\Windows"))
+        env["PATH"] = os.pathsep.join((str(Path(python).parent), str(windows / "System32"), str(windows)))
+    subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=env)
     exe = DIST / f"{APP_NAME}.exe"
     versioned = DIST / f"{APP_NAME}-{version}.exe"
     versioned.unlink(missing_ok=True)
