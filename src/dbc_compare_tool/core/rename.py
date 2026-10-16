@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Generic, Iterable, Protocol, TypeVar
@@ -213,6 +214,46 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
         self.ecu_map = dict(ecu_map or {})
         if is_event_like:
             self.threshold = self.event_threshold
+
+    def _property_key(self, signal: Signal, *, old: bool) -> tuple:
+        properties = signal.comparable_properties()
+        if self.ecu_map:
+            properties["Receivers"] = tuple(sorted(
+                self.ecu_map.get(node, node) if old else node
+                for node in signal.receivers
+            ))
+        return tuple(properties.items())
+
+    def match(self, old_items: Iterable[Signal], new_items: Iterable[Signal]) -> list[RenameMatch[Signal]]:
+        """Reserve unique pure renames before scoring the remaining candidates.
+
+        Repeated scaling or overlapping multiplexed layouts must not penalize a
+        pair whose complete properties identify it uniquely on both sides.
+        Duplicate full signatures still go through the ambiguity checks.
+        """
+        old_list, new_list = list(old_items), list(new_items)
+        old_groups: dict[tuple, list[Signal]] = defaultdict(list)
+        new_groups: dict[tuple, list[Signal]] = defaultdict(list)
+        for signal in old_list:
+            old_groups[self._property_key(signal, old=True)].append(signal)
+        for signal in new_list:
+            new_groups[self._property_key(signal, old=False)].append(signal)
+
+        exact_matches = []
+        for key, old_group in old_groups.items():
+            new_group = new_groups.get(key, [])
+            if len(old_group) == len(new_group) == 1:
+                exact_matches.append(RenameMatch(
+                    old_group[0], new_group[0], 1.0, "High",
+                    ("All signal properties matched uniquely (after ECU mapping)"
+                     if self.ecu_map else "All signal properties matched uniquely",),
+                ))
+        used_old = {id(match.old) for match in exact_matches}
+        used_new = {id(match.new) for match in exact_matches}
+        return exact_matches + super().match(
+            (signal for signal in old_list if id(signal) not in used_old),
+            (signal for signal in new_list if id(signal) not in used_new),
+        )
 
     def score(self, old: Signal, new: Signal) -> tuple[float, tuple[str, ...]]:
         if self.is_event_like:

@@ -27,7 +27,7 @@ This project is a local Windows desktop application for automotive engineers com
 3. Rename Detection Engine
    - Messages with the same frame key and a different name are exact renames (confidence 1.0).
    - Messages whose frame key also changed are matched via `MessageRenameDetector`, a structural scorer over DLC, transmitter, cycle time, signal count, and signal-layout overlap (name similarity is minor supporting evidence).
-   - Signals are compared inside an already-matched message pair — which includes a pair matched by message rename, so the two messages may carry different CAN IDs. Signals left over after exact-name matching are scored via `SignalRenameDetector`, with a relaxed name-driven mode for Event Matrix-style messages.
+   - Signals are compared inside an already-matched message pair — which includes a pair matched by message rename, so the two messages may carry different CAN IDs. After exact-name matching, `SignalRenameDetector` reserves unique complete-property matches before scoring the remaining candidates, with a relaxed name-driven mode for Event Matrix-style messages.
    - DBC file pairing combines deterministic keyword/content scoring with global assignment. Message/signal rename detection remains automatic in both interfaces.
 
 4. Report Generator
@@ -126,7 +126,9 @@ DBC file pairing locks equal relative paths first. Remaining databases are profi
 
 Message rename detection prefers frame key equality; when the frame key also changes, unmatched messages fall back to `MessageRenameDetector` structural scoring (threshold 0.60).
 
-Signal rename detection matches by **exact name** first. Every signal left unmatched on either side is then scored by `SignalRenameDetector` and resolved with greedy one-to-one matching. There is no separate bit-layout matching pass — bit layout enters the decision only as weighted criteria inside the score. `Signal.signal_key()` (`start_bit`, `length`) is used afterwards, and only to word the report description: a leftover signal whose key still exists on the other side is described as removed/added "after layout/name change" rather than a plain removal or addition.
+Signal rename detection matches by **exact name** first. `SignalRenameDetector` then groups the remaining signals by every property returned by `Signal.comparable_properties()`, applying selected ECU mappings to receivers. A signature present exactly once on each side is reserved as a rename with confidence 1.0 (`High`). This includes bit position, multiplexing, ranges, value tables and comments; layout alone is insufficient. Duplicate full signatures are not treated as exact matches. Remaining signals are scored and resolved with greedy one-to-one matching. `Signal.signal_key()` (`start_bit`, `length`) is used afterwards only to word leftover add/remove descriptions.
+
+`DBC File` display labels contain only the old and new basenames, joined by ` -> ` (or one basename for an unpaired file). Relative/absolute paths are retained separately in `FilePairSummary` and DBC Overview; discovery and pairing still operate on full relative paths. Duplicate basenames may therefore share a display label.
 
 ### Frame key
 
@@ -185,7 +187,7 @@ already an exact rename with confidence 1.0 and never goes through scoring. Thre
 
 ### Signal rename — `SignalRenameDetector` (rename.py)
 
-Applied per matched message pair, to the signals left over after exact-name matching. Two weight
+Applied per matched message pair, to the signals left over after exact-name and unique complete-property matching. Two weight
 sets; the parent message decides which one is used — the event-like set is selected when *either*
 the old or the new message is event-like.
 
@@ -202,9 +204,9 @@ the old or the new message is event-like.
 | Name similarity | 0.05 × ratio | **0.50 × ratio** |
 
 The event-like column deliberately inverts the priority: in an Event Matrix message dozens of signals
-share identical technical properties, so structure is nearly worthless as evidence and the name
-carries the decision. Note the consequence — structural checks there total 0.38, so an event-like
-match maxes out at 0.88 and can never be reported as High confidence.
+share common technical properties, so the name carries more of the fallback decision. Structural
+checks there total 0.38, so an event-like fallback match maxes out at 0.88 and cannot be reported as
+High confidence. Unique complete-property matches bypass this scoring and remain High.
 
 A message counts as event-like (`EventMessageDetector.is_event_like`) when **all** of: it has at least
 5 signals, at least 70% of them are ≤ 4 bits, and at least 60% share the same
@@ -212,7 +214,7 @@ A message counts as event-like (`EventMessageDetector.is_event_like`) when **all
 
 ### Matching procedure and confidence
 
-All old×new pairs are scored and those at or above the threshold become candidates. Ambiguity is then
+After reserving unique complete-property signal pairs, all remaining old×new pairs are scored and those at or above the threshold become candidates. Ambiguity is then
 penalised symmetrically: when *n* items on one side compete for the same item on the other — several
 old items for one new item, or several new items for one old item — each competing candidate loses
 `0.15 × (n − 1)` and gains an "Ambiguous" reason. A candidate must still meet the detector threshold

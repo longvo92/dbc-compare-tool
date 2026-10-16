@@ -48,7 +48,7 @@ Select two `.dbc` files to compare them directly, or two folders to discover and
 - **DBC file pairing** — matches relative paths first, then chooses a global one-to-one pairing using shared filename/folder keywords and message content. Release/version decorations are ignored; shared keywords can pair DBCs even when their contents differ completely.
 - **Manual pairing** — **Manual Pairing…** chooses DBC counterparts only. **Run Compare** exports directly; message and signal matching stays automatic.
 - **Message rename detection** — scored over CAN ID, DLC, transmitter, cycle time, signal count and signal layout, so a message whose CAN ID changed can still be matched.
-- **Signal rename detection** — scored over start bit, length, byte order, signedness, factor/offset, unit and receivers, with name similarity as supporting evidence. Event Matrix-style messages, where those properties repeat across dozens of signals, switch to a name-driven mode that can never report High confidence.
+- **Signal rename detection** — first pairs signals whose complete properties match uniquely, including multiplexing, range, value tables and comments. This preserves bulk signal renames even when the parent message also changes name. Remaining signals use weighted similarity; Event Matrix-style messages use a more conservative, name-driven score.
 - **Value tables and comments** — `VAL_` value tables are compared for signals, `CM_` comments for both messages and signals.
 - **Change-type filter** — include only Added / Removed / Modified / Renamed in the report.
 - **Include Unchanged** — optionally export all messages and signals, including `Unchanged`, with filterable OLD/NEW ECU Tx/Rx and technical properties.
@@ -87,6 +87,8 @@ Rows are colour-coded by change type — 🟩 Added, 🟥 Removed, 🟨 Modified
 
 Detail sheets keep entity names, parent names, OLD/NEW CAN IDs, ECU context and rename confidence. Technical property snapshots and repeated before/after descriptions are removed; changes to DLC, cycle time, signal layout, scaling, range, multiplexing, value tables and comments appear only in **Changed Properties**. Selected ECU mappings are recorded in **Summary**.
 
+**DBC File** contains only `old.dbc -> new.dbc` for paired files, or the available filename for an added/removed file. Paths and pairing evidence remain in their separate **DBC Overview** columns. Files with identical basenames in different folders can share a display label.
+
 With **Include Unchanged**, unchanged entries appear in gray and are counted separately from **Total Changes**. `Unchanged` describes the entity's own compared properties after applying any selected ECU mapping: a message can contain modified signals, and a signal can belong to a renamed/modified message. Review both detail sheets and **Changed Properties**, which continues to list changed properties only. The Summary records the report mode and skipped parse-error count; check `DBC Overview` for incomplete coverage.
 
 **`Summary` — the headline numbers:**
@@ -111,7 +113,7 @@ Rename detection is a heuristic, not a proof. Structural properties carry the sc
 
 Two limits are worth knowing before you trust a verdict:
 
-- Event Matrix-style messages have dozens of structurally identical signals, so their matches lean on name similarity and can never reach `High`.
+- A unique match across all signal properties receives `High` confidence, including in Event Matrix-style messages. Duplicate full signatures and signals with changed properties fall back to similarity scoring; event-like fallback matches cannot reach `High`.
 - Review a detected rename whenever the difference between `Renamed` and `Removed + Added` matters to you.
 
 Scoring weights and known edge cases are in [docs/architecture.md](docs/architecture.md).

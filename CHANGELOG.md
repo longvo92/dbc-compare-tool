@@ -10,6 +10,16 @@ for the procedure.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-16
+
+### Fixed
+
+- Detect bulk signal renames with unchanged properties even when the parent message is renamed, including overlapping multiplexed signals and event-like messages with unique complete-property matches.
+
+### Changed
+
+- Show only OLD/NEW DBC filenames in DBC File cells; retain paths and pairing evidence in separate DBC Overview columns.
+
 ## [0.6.0] - 2026-10-12
 
 ### Added
