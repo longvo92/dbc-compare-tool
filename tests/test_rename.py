@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from dbc_compare_tool.core.models import Message, Signal
 from dbc_compare_tool.core.rename import (
@@ -64,6 +65,55 @@ class TestSignalRenameDetector(unittest.TestCase):
         self.assertEqual(self.detector.get_confidence_level(0.95), "High")
         self.assertEqual(self.detector.get_confidence_level(0.80), "Medium")
         self.assertEqual(self.detector.get_confidence_level(0.65), "Low")
+
+    def test_bulk_prefix_rename_keeps_unique_exact_pairs(self):
+        old = [_make_signal(f"VCU_Value_{i}", start_bit=i * 8) for i in range(8)]
+        new = [replace(signal, name=signal.name.replace("VCU_", "IVC_")) for signal in old]
+        for event_like in (False, True):
+            for targets in (new, list(reversed(new))):
+                with self.subTest(event_like=event_like, reversed=targets != new):
+                    matches = SignalRenameDetector(is_event_like=event_like).match(old, targets)
+                    self.assertEqual({(m.old.name, m.new.name) for m in matches},
+                                     {(a.name, b.name) for a, b in zip(old, new)})
+                    self.assertTrue(all(m.confidence == 1.0 for m in matches))
+
+    def test_exact_pairs_distinguish_multiplex_branches(self):
+        old = [_make_signal(f"VCU_Size_{i}", start_bit=8, length=16,
+                            multiplexer_ids=(i,), multiplexer_signal="Mode") for i in range(5)]
+        new = [replace(signal, name=signal.name.replace("VCU_", "IVC_")) for signal in old]
+        matches = self.detector.match(old, list(reversed(new)))
+        self.assertEqual(len(matches), 5)
+        self.assertTrue(all(m.old.multiplexer_ids == m.new.multiplexer_ids for m in matches))
+
+    def test_all_properties_disambiguate_exact_pairs(self):
+        variants = [
+            {"minimum": 1.0}, {"maximum": 100.0}, {"value_type": "float"},
+            {"comment": "Different meaning"}, {"value_descriptions": ((0, "Off"),)},
+            {"is_multiplexer": True}, {"multiplexer_signal": "Other"},
+        ]
+        for variant in variants:
+            with self.subTest(variant=variant):
+                old = [_make_signal("VCU_A"), _make_signal("VCU_B", **variant)]
+                new = [replace(signal, name=signal.name.replace("VCU_", "IVC_")) for signal in old]
+                matches = self.detector.match(old, list(reversed(new)))
+                self.assertEqual({(m.old.name, m.new.name) for m in matches},
+                                 {("VCU_A", "IVC_A"), ("VCU_B", "IVC_B")})
+                self.assertTrue(all(m.confidence == 1.0 for m in matches))
+
+    def test_exact_pairs_use_ecu_mapping_without_changing_models(self):
+        old = [_make_signal(f"VCU_Value_{i}", start_bit=i * 8, receivers=("OLD",)) for i in range(5)]
+        new = [replace(s, name=s.name.replace("VCU_", "IVC_"), receivers=("NEW",)) for s in old]
+        matches = SignalRenameDetector(ecu_map={"OLD": "NEW"}).match(old, new)
+        self.assertEqual(len(matches), 5)
+        self.assertTrue(all(m.confidence == 1.0 for m in matches))
+        self.assertEqual(matches[0].old.receivers, ("OLD",))
+
+    def test_property_change_is_not_reported_as_exact(self):
+        old = _make_signal("VCU_Size")
+        new = replace(old, name="IVC_Size", maximum=100.0)
+        matches = self.detector.match([old], [new])
+        self.assertEqual(len(matches), 1)
+        self.assertLess(matches[0].confidence, 1.0)
 
 
 class TestSignalRenameDetectorEventMode(unittest.TestCase):

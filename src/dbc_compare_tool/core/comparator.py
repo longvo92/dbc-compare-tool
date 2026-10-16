@@ -4,7 +4,7 @@ import warnings
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from dbc_compare_tool.core.discovery import collect_dbc_files, discover_dbc_pairs
 from dbc_compare_tool.core.ecu import (
@@ -153,9 +153,10 @@ class DbcComparator:
                     new_db = parse_dbc(pair.new_path)
                     if progress_callback:
                         progress_callback(f"[{i}/{total}] Comparing: {pair.relative_path}")
-                    self.compare_databases(pair.relative_path, old_db, new_db, result)
+                    label = _format_file_pair_label(pair.relative_path, pair.relative_path)
+                    self.compare_databases(label, old_db, new_db, result)
                     result.file_pairs.append(_file_pair_summary(
-                        label=pair.relative_path,
+                        label=label,
                         status="Matched",
                         old_path=pair.relative_path,
                         new_path=pair.relative_path,
@@ -355,6 +356,7 @@ class DbcComparator:
         new_db: DbcDatabase,
         result: ComparisonResult | None = None,
     ) -> ComparisonResult:
+        dbc_file = _format_file_pair_label(*dbc_file.split(" -> ", 1))
         if result is None:
             validate_ecu_map(self.ecu_map, database_ecu_nodes(old_db), database_ecu_nodes(new_db))
             result = ComparisonResult()
@@ -690,10 +692,11 @@ def _frame_key(message: Message) -> tuple[int, bool]:
     return (message.can_id, message.is_extended_frame)
 
 
-def _format_file_pair_label(old_relative_path: str, new_relative_path: str) -> str:
-    if old_relative_path == new_relative_path:
-        return old_relative_path
-    return f"{old_relative_path} -> {new_relative_path}"
+def _format_file_pair_label(old_relative_path: str, new_relative_path: str = "") -> str:
+    """Keep only filenames in display labels; paths live in DBC Overview."""
+    return " -> ".join(
+        PureWindowsPath(path).name for path in (old_relative_path, new_relative_path) if path
+    )
 
 
 def _count_signals(db: DbcDatabase) -> int:
@@ -712,7 +715,7 @@ def _file_pair_summary(
     pairing_reasons: tuple[str, ...] = (),
 ) -> FilePairSummary:
     return FilePairSummary(
-        dbc_file=label,
+        dbc_file=_format_file_pair_label(*label.split(" -> ", 1)),
         status=status,
         old_path=old_path,
         new_path=new_path,

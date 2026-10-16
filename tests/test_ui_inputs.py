@@ -187,6 +187,26 @@ class GuiInputTests(unittest.TestCase):
         self.assertEqual(self.window._saved_ecu_map, {"OldNode": "NewNode"})
         self.assertEqual(self.window._saved_ecu_inputs, self.window._current_inputs())
 
+    def test_bulk_rename_exports_correct_rows_through_gui(self):
+        from openpyxl import load_workbook
+        from tests.test_bulk_rename import NEW_DBC, OLD_DBC, SUFFIXES
+
+        self.old.write_text(OLD_DBC, encoding="utf-8")
+        self.new.write_text(NEW_DBC, encoding="utf-8")
+        self._files()
+        report = self.root / "bulk.xlsx"
+        self.window.output_input.setText(str(report))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.window._run_compare()
+            self._wait_until(lambda: self.window.run_button.isEnabled())
+        error.assert_not_called()
+        workbook = load_workbook(report)
+        self.addCleanup(workbook.close)
+        rows = list(workbook["Signal Details"].values)[1:]
+        self.assertEqual(len(rows), len(SUFFIXES))
+        self.assertTrue(all(row[0] == "old.dbc -> new.dbc" and row[2] == "Renamed" for row in rows))
+        self.assertEqual(workbook["Changed Properties"].max_row, 1)
+
     def test_ecu_parse_failure_restores_controls(self):
         self._files()
         self.new.write_text("invalid DBC", encoding="utf-8")

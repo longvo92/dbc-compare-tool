@@ -93,7 +93,7 @@ class TestParseErrorResilience(unittest.TestCase):
     def test_bad_file_reported_and_good_file_still_compared(self):
         result = DbcComparator().compare_folders(self.old_folder, self.new_folder)
         statuses = {fp.dbc_file: fp.status for fp in result.file_pairs}
-        self.assertEqual(statuses.get("good.dbc"), "Matched")
+        self.assertEqual(statuses.get("good.dbc -> good.dbc"), "Matched")
         self.assertEqual(statuses.get("bad.dbc"), "Parse Error")
 
     def test_progress_callback_reports_parse_error(self):
