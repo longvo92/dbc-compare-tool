@@ -71,6 +71,8 @@ For folders, the CLI uses automatic DBC pairing and the GUI also offers manual p
 | `scripts/build.py` | Builds the one-file `.exe` (PyInstaller, resources bundled) and the `.pyzw` zipapp (resources copied next to it, because `_resource_path()` resolves to the folder containing the archive) |
 | `scripts/release_check.py` | The release gate: version format, `__init__.py` and `pyproject.toml` agreeing with the version being released, `CHANGELOG.md` documenting it as the newest dated section, and nothing left under `[Unreleased]`. Also extracts that section for the GitHub release body |
 
+On Windows, the PyInstaller subprocess receives a PATH containing only the selected Python directory and Windows system directories. Package hooks supply Qt's own DLL locations. This prevents unrelated tools such as Poppler from supplying an incompatible `icuuc.dll`. Startup verification must confirm the main application window: a live process can instead be displaying a fatal-error dialog.
+
 Two workflows, deliberately split by who triggers them:
 
 - `.github/workflows/test.yml` runs on every push and pull request to `main`: the suite plus a CLI
@@ -79,8 +81,8 @@ Two workflows, deliberately split by who triggers them:
 - `.github/workflows/release.yml` is `workflow_dispatch` only and refuses to run off `main`. It
   reads; it never writes to the repository. The default run is a rehearsal — build both artifacts,
   **start** both of them, upload, stop — and publishing takes an explicit `publish=true`. Starting
-  the artifacts is the point: a PyInstaller bundle missing a module fails there and nowhere else,
-  since the unit suite imports from source.
+  the artifacts exercises the packaged dependencies, which the source-based unit suite does not cover.
+  The workflow checks process lifetime; also inspect the downloaded EXE's main window to rule out a fatal-error dialog.
 
 `CHANGELOG.md` is the single source for release notes: the app's Help menu, the `Changelog` link in
 `pyproject.toml`, and the GitHub release body all resolve to it.
