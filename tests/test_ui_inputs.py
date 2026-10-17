@@ -363,20 +363,68 @@ class GuiInputTests(unittest.TestCase):
         self.assertEqual(results[0].message_changes[0].old_message.transmitter, "OldNode")
         self.assertEqual(results[0].message_changes[0].new_message.transmitter, "NewNode")
 
-    def test_ecu_dialog_rejects_duplicate_targets_and_unmapped_collisions(self):
-        for target in ("B", "C"):
+    def test_ecu_dialog_saves_one_or_two_pairs_with_other_nodes_kept(self):
+        for mapping in ({"A": "B"}, {"A": "B", "C": "D"}):
+            with self.subTest(mapping=mapping):
+                nodes = ["A", "B", "C", "D", "E"]
+                dialog = EcuPairingDialog(self.window, nodes, ["B", "C", "D", "E"])
+                for row, node in enumerate(nodes):
+                    if node in mapping:
+                        combo = dialog.table.cellWidget(row, 1)
+                        combo.setCurrentIndex(combo.findData(mapping[node]))
+                with patch(f"{_UI}.QMessageBox.warning") as warning:
+                    dialog._on_save()
+                warning.assert_not_called()
+                self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+                self.assertEqual(dialog.pair_map(), mapping)
+                restored = EcuPairingDialog(self.window, nodes, ["B", "C", "D", "E"], previous=dialog.pair_map())
+                for row, node in enumerate(nodes):
+                    self.assertEqual(restored.table.cellWidget(row, 1).currentData(), mapping.get(node))
+                restored.deleteLater()
+                dialog.deleteLater()
+
+    def test_ecu_dialog_rejects_duplicate_selected_rename_targets(self):
+        for target in ("C", "D"):
             with self.subTest(target=target):
-                dialog = EcuPairingDialog(self.window, ["A", "B"], ["B", "C"])
+                dialog = EcuPairingDialog(self.window, ["A", "B"], ["C", "D"])
                 first = dialog.table.cellWidget(0, 1)
                 first.setCurrentIndex(first.findData(target))
-                if target == "C":
-                    second = dialog.table.cellWidget(1, 1)
-                    second.setCurrentIndex(second.findData(target))
+                second = dialog.table.cellWidget(1, 1)
+                second.setCurrentIndex(second.findData(target))
                 with patch(f"{_UI}.QMessageBox.warning") as warning:
                     dialog._on_save()
                 warning.assert_called_once()
                 self.assertNotEqual(dialog.result(), QDialog.DialogCode.Accepted)
                 dialog.deleteLater()
+
+    def test_partial_ecu_pairing_saves_and_exports_through_gui(self):
+        self.old.write_text(_DBC.format(sender="OldNode").replace("Receiver Spare", "Receiver Spare NewNode"), encoding="utf-8")
+        self._files()
+        self.window.chk_include_unchanged.setChecked(True)
+        report = self.root / "partial.xlsx"
+        self.window.output_input.setText(str(report))
+        original_exec = EcuPairingDialog.exec
+
+        def save_partial(dialog):
+            row = next(row for row in range(dialog.table.rowCount()) if dialog.table.item(row, 0).text() == "OldNode")
+            combo = dialog.table.cellWidget(row, 1)
+            combo.setCurrentIndex(combo.findData("NewNode"))
+            QTimer.singleShot(0, dialog._on_save)
+            return original_exec(dialog)
+
+        with patch.object(EcuPairingDialog, "exec", save_partial), patch(f"{_UI}.QMessageBox.warning") as warning:
+            self.window._open_ecu_pairing()
+            self._wait_until(lambda: self.window.run_button.isEnabled())
+        warning.assert_not_called()
+        self.assertEqual(self.window._saved_ecu_map, {"OldNode": "NewNode"})
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.window._run_compare()
+            self._wait_until(lambda: self.window.run_button.isEnabled())
+        error.assert_not_called()
+        self.assertEqual(self.window.worker.ecu_map, {"OldNode": "NewNode"})
+        self.assertEqual(self.window.last_report, report)
+        self.assertTrue(report.is_file())
+        self.assertIn("0 changes", self.window.run_status.text())
 
     def test_ecu_dialog_supports_swaps_and_clearing_saved_mapping(self):
         dialog = EcuPairingDialog(

@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--new", required=True, nargs="+", metavar="PATH", help="New baseline folder or .dbc file")
     parser.add_argument(
         "--ecu-pair", action="append", default=[], metavar="OLD=NEW",
-        help="Treat an OLD ECU node as the paired NEW node (repeat for multiple pairs)",
+        help="Rename only this OLD ECU node for comparison; other nodes keep their names (repeat for multiple pairs)",
     )
     parser.add_argument(
         "--include-unchanged",

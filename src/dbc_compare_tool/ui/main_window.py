@@ -351,8 +351,8 @@ class EcuPairingDialog(QDialog):
         self._new_nodes = set(new_nodes)
         layout = QVBoxLayout(self)
         hint = QLabel(
-            "Choose the NEW node for each renamed OLD node. Leave other nodes at "
-            "Keep original name. Each target node can be used only once. "
+            "Pair only the nodes you want to rename. Leave the rest at "
+            "Keep original name. Selected renames must use different NEW nodes. "
             "Pairing applies across the selected baselines; original names remain in the report."
         )
         hint.setObjectName("hintLabel")

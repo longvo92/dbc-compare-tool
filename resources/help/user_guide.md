@@ -5,14 +5,14 @@
 1. Open the tool. Choose **Files** or **Folders** under **Input Type**.
 2. Select **Old Baseline** and **New Baseline**; both must use the same input type.
 3. Set an `.xlsx` **Report Path**, or leave it empty to save automatically beside NEW.
-4. Optional: set file pairs with **Manual Pairing…** (folders; pair every OLD file) or renamed nodes with **ECU Pairing…**. Click **Save**.
+4. Optional: use **Manual Pairing…** for files (folders; pair every OLD file). In **ECU Pairing…**, select only nodes to rename, leave the rest at **Keep original name**, then **Save**.
 5. Select change types. For all entries, enable **Include Unchanged**; change-type filters will be ignored.
 6. Click **Run Compare**, then **Open Report** when finished.
 
 ## CLI
 
 After source installation, run from the repository folder: `.\run_cli.bat --old "old.dbc" --new "new.dbc" --out "report.xlsx"`.
-For folders, pass two folder paths. Add `--include-unchanged` for all entries or repeat `--ecu-pair OLD=NEW` for renamed nodes.
+For folders, pass two folder paths. Add `--include-unchanged` for all entries. Repeat `--ecu-pair OLD=NEW` for renamed nodes; other nodes keep their names.
 
 ## Excel Basics
 

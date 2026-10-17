@@ -33,7 +33,7 @@ Added or removed DBCs are compared against an empty database so their messages a
 - `compare_manual` accepts a DBC pairing map. The GUI uses saved manual pairs only when every OLD file is paired; otherwise it uses automatic pairing.
 - A message's frame key is `(can_id, is_extended_frame)`, keeping standard and extended frames distinct.
 - Signals are matched within their paired parent messages.
-- ECU mappings are one-to-one, reference existing nodes and cannot collide with unmapped OLD names. Original names remain in report data.
+- ECU mappings reference existing nodes; selected renames must have distinct targets. Unselected nodes keep their names, even when a rename uses that name as its target. Original names remain in report data.
 - `include_unchanged=True` retains unchanged entries and bypasses change-type filters. `Total Changes` excludes unchanged entries.
 - `filter_result` preserves file pairs and ECU mappings.
 
