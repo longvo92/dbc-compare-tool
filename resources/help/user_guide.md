@@ -2,17 +2,17 @@
 
 ## Tool (GUI)
 
-1. Open the tool and choose **Files** or **Folders** under **Input Type**.
+1. Open the tool. Choose **Files** or **Folders** under **Input Type**.
 2. Select **Old Baseline** and **New Baseline**; both must use the same input type.
 3. Set an `.xlsx` **Report Path**, or leave it empty to save automatically beside NEW.
-4. Optional: use **Manual Pairing…** for folders (pair every OLD file) or **ECU Pairing…** for renamed nodes, then **Save**.
-5. Select change types, or enable **Include Unchanged** for the full inventory; this ignores change-type filters.
+4. Optional: set file pairs with **Manual Pairing…** (folders; pair every OLD file) or renamed nodes with **ECU Pairing…**. Click **Save**.
+5. Select change types. For all entries, enable **Include Unchanged**; change-type filters will be ignored.
 6. Click **Run Compare**, then **Open Report** when finished.
 
 ## CLI
 
-After installing the Python package, run: `dbc-compare-tool --old "old.dbc" --new "new.dbc" --out "report.xlsx"`.
-Use two folder paths for folder comparisons. Add `--include-unchanged` for all entries or `--ecu-pair OLD=NEW` for renamed nodes.
+After source installation, run from the repository folder: `.\run_cli.bat --old "old.dbc" --new "new.dbc" --out "report.xlsx"`.
+For folders, pass two folder paths. Add `--include-unchanged` for all entries or repeat `--ecu-pair OLD=NEW` for renamed nodes.
 
 ## Excel Basics
 
