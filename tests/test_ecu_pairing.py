@@ -1,11 +1,14 @@
 """ECU rename equivalence, validation and preserved original report context."""
 from __future__ import annotations
 
+import contextlib
+import io
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
 
+from dbc_compare_tool.cli import main
 from dbc_compare_tool.core.comparator import DbcComparator, filter_result
 from dbc_compare_tool.core.ecu import collect_ecu_nodes, validate_ecu_map
 from dbc_compare_tool.core.models import DbcDatabase, Message, Signal
@@ -82,12 +85,28 @@ class TestEcuPairing(unittest.TestCase):
         self.assertEqual(result.message_changes[0].property_diffs, (("Transmitter", "A", "A"),))
         self.assertEqual(result.signal_changes[0].property_diffs, (("Receivers", "A", "A"),))
 
-    def test_duplicate_targets_unknown_nodes_and_implicit_collisions_are_rejected(self):
+    def test_partial_mapping_keeps_unselected_nodes_and_original_report_context(self):
+        for mapping in ({"A": "B"}, {"A": "B", "C": "D"}, {"A": "B", "B": "B"}):
+            with self.subTest(mapping=mapping):
+                old = _database("A", ("C",))
+                new = _database("B", (mapping.get("C", "C"),))
+                stable = replace(_database("B", ("D", "E")).messages["Status"], name="Stable", can_id=200)
+                old.messages["Stable"] = new.messages["Stable"] = stable
+                result = DbcComparator(include_unchanged=True, ecu_map=mapping).compare_databases("bus", old, new)
+                self.assertEqual(result.summary()["Total Changes"], 0)
+                self.assertEqual(len(result.message_changes), 2)
+                self.assertEqual(len(result.signal_changes), 2)
+                self.assertTrue(all(change.change_type == "Unchanged" for change in result.message_changes + result.signal_changes))
+                self.assertEqual(result.message_changes[0].old_message.transmitter, "A")
+                self.assertEqual(result.message_changes[0].new_message.transmitter, "B")
+                self.assertEqual(result.message_changes[1].old_message.transmitter, "B")
+                self.assertEqual(result.message_changes[1].new_message.transmitter, "B")
+
+    def test_duplicate_targets_and_unknown_nodes_are_rejected(self):
         cases = [
             ({"A": "C", "B": "C"}, {"A", "B"}, {"C"}, "more than once"),
             ({"MISSING": "C"}, {"A"}, {"C"}, "OLD: MISSING"),
             ({"A": "MISSING"}, {"A"}, {"C"}, "NEW: MISSING"),
-            ({"A": "B"}, {"A", "B"}, {"B"}, "collide"),
             ({"": "B"}, {"A"}, {"B"}, "non-empty"),
         ]
         for mapping, old, new, message in cases:
@@ -176,6 +195,34 @@ class TestEcuDiscoveryAndFolderMappings(unittest.TestCase):
         self.assertEqual(manual.summary()["Total Changes"], 0)
         with self.assertRaisesRegex(ValueError, "OLD: MISSING"):
             DbcComparator(ecu_map={"MISSING": "C"}).compare_paths(self.root / "old", self.root / "new")
+
+    def test_partial_mapping_in_files_folders_manual_and_cli(self):
+        for mapping in ({"A": "B"}, {"A": "B", "C": "D"}):
+            with self.subTest(mapping=mapping):
+                for index, node in enumerate(("A", "B", "C", "D", "E")):
+                    self._write(self.root / "old" / f"{index}.dbc", node, node, "A B C D E")
+                    target = mapping.get(node, node)
+                    self._write(self.root / "new" / f"{index}.dbc", target, target, "B C D E")
+                comparator = DbcComparator(ecu_map=mapping)
+                results = [
+                    comparator.compare_files(self.root / "old/0.dbc", self.root / "new/0.dbc"),
+                    comparator.compare_paths(self.root / "old", self.root / "new"),
+                    comparator.compare_manual(self.root / "old", self.root / "new",
+                                              {f"{i}.dbc": f"{i}.dbc" for i in range(5)}),
+                ]
+                self.assertTrue(all(result.summary()["Total Changes"] == 0 for result in results))
+                for mode in ("files", "folders"):
+                    suffix = "0.dbc" if mode == "files" else ""
+                    output = self.root / f"{mode}.xlsx"
+                    args = ["--old", str(self.root / "old" / suffix), "--new", str(self.root / "new" / suffix),
+                            "--out", str(output)]
+                    for old, new in mapping.items():
+                        args.extend(("--ecu-pair", f"{old}={new}"))
+                    log = io.StringIO()
+                    with contextlib.redirect_stdout(log):
+                        self.assertEqual(main(args), 0)
+                    self.assertIn("Total changes: 0", log.getvalue())
+                    self.assertTrue(output.is_file())
 
 
 if __name__ == "__main__":

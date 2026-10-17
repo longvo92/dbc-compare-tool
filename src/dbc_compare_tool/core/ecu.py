@@ -45,7 +45,8 @@ def validate_ecu_map(
 ) -> None:
     if any(not isinstance(node, str) or not node.strip() for pair in ecu_map.items() for node in pair):
         raise ValueError("ECU pairs must contain non-empty OLD and NEW node names")
-    duplicates = sorted(node for node, count in Counter(ecu_map.values()).items() if count > 1)
+    renamed_targets = (new for old, new in ecu_map.items() if old != new)
+    duplicates = sorted(node for node, count in Counter(renamed_targets).items() if count > 1)
     if duplicates:
         raise ValueError(f"NEW ECU nodes paired more than once: {', '.join(duplicates)}")
     if old_nodes is None or new_nodes is None:
@@ -59,13 +60,6 @@ def validate_ecu_map(
         if missing_new:
             details.append(f"NEW: {', '.join(missing_new)}")
         raise ValueError(f"Paired ECU nodes not found in selected inputs ({'; '.join(details)})")
-    unchanged_old = old_nodes - set(ecu_map)
-    collisions = sorted(set(ecu_map.values()) & unchanged_old)
-    if collisions:
-        raise ValueError(
-            f"ECU pairs collide with unmapped OLD nodes: {', '.join(collisions)}. "
-            "Pair those nodes to different NEW nodes as well."
-        )
 
 
 def transmitters_match(old: str, new: str, ecu_map: dict[str, str]) -> bool:

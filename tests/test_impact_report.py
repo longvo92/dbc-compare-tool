@@ -143,7 +143,9 @@ class ImpactReportTests(unittest.TestCase):
                     self.assertIsNone(row[f"CAN ID ({missing})"])
 
     def test_signal_added_removed_inside_matched_parent(self):
-        new_signals = {"Speed": self.message.signals["Speed"], "Temperature": _signal("Temperature", 32)}
+        # Keep the replacement structurally unrelated to test actual add/remove routing.
+        temperature = replace(_signal("Temperature", 32), length=16, factor=0.1, unit="degC")
+        new_signals = {"Speed": self.message.signals["Speed"], "Temperature": temperature}
         result = self._compare(new=_database(replace(self.message, signals=new_signals)))
         rows = _rows(self._report(result)["Signal Details"])
         removed = next(row for row in rows if row["Change Type"] == "Removed")

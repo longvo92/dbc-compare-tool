@@ -351,8 +351,8 @@ class EcuPairingDialog(QDialog):
         self._new_nodes = set(new_nodes)
         layout = QVBoxLayout(self)
         hint = QLabel(
-            "Choose the NEW node for each renamed OLD node. Leave other nodes at "
-            "Keep original name. Each target node can be used only once. "
+            "Pair only the nodes you want to rename. Leave the rest at "
+            "Keep original name. Selected renames must use different NEW nodes. "
             "Pairing applies across the selected baselines; original names remain in the report."
         )
         hint.setObjectName("hintLabel")
@@ -361,7 +361,10 @@ class EcuPairingDialog(QDialog):
         self.table = QTableWidget(len(old_nodes), 2)
         self.table.setHorizontalHeaderLabels(["OLD ECU Node", "NEW ECU Node"])
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         for row, old_node in enumerate(old_nodes):
             self.table.setItem(row, 0, QTableWidgetItem(old_node))
@@ -440,6 +443,7 @@ class ManualPairingDialog(QDialog):
         self.table = QTableWidget(len(old_files), 2)
         self.table.setHorizontalHeaderLabels(["Old Baseline DBC", "New Baseline DBC"])
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
@@ -694,6 +698,7 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.progress.setTextVisible(False)
+        self.progress.hide()
         self.open_button.setEnabled(False)
         self.log_view.setObjectName("logView")
         self.log_view.setReadOnly(True)
@@ -807,7 +812,13 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Load Failed", f"Unable to scan folders: {exc}")
             return False
 
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        previous_status = self.run_status.text()
+        self.run_status.setText("Editing DBC pairing…")
+        try:
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self.run_status.setText(previous_status)
+        if not accepted:
             return False
 
         self._saved_pair_map = dialog.pair_map()
@@ -848,6 +859,7 @@ class MainWindow(QMainWindow):
         self._set_actions_enabled(False)
         self.open_button.setEnabled(False)
         self.progress.setRange(0, 0)
+        self.progress.show()
         self.run_status.setText("Loading ECU nodes…")
         self.ecu_worker = EcuDiscoveryWorker(*paths)
         self.ecu_worker.loaded.connect(self._on_ecu_nodes_loaded)
@@ -857,6 +869,7 @@ class MainWindow(QMainWindow):
     def _finish_ecu_loading(self) -> None:
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
+        self.progress.hide()
         self._set_actions_enabled(True)
         self.open_button.setEnabled(self.last_report is not None)
         self.run_status.setText("Ready to compare")
@@ -868,12 +881,18 @@ class MainWindow(QMainWindow):
         previous = (
             self._saved_ecu_map if self._saved_ecu_inputs == self._current_inputs() else None
         )
-        dialog = EcuPairingDialog(self, old_nodes, new_nodes, previous=previous)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._saved_ecu_map = dialog.pair_map()
-            self._saved_ecu_inputs = self._current_inputs()
-            self._log(f"ECU pairing saved: {len(self._saved_ecu_map)} renamed node pair(s).")
-        self._finish_ecu_loading()
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.progress.hide()
+        self.run_status.setText("Editing ECU pairing…")
+        try:
+            dialog = EcuPairingDialog(self, old_nodes, new_nodes, previous=previous)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self._saved_ecu_map = dialog.pair_map()
+                self._saved_ecu_inputs = self._current_inputs()
+                self._log(f"ECU pairing saved: {len(self._saved_ecu_map)} renamed node pair(s).")
+        finally:
+            self._finish_ecu_loading()
 
     def _ecu_load_failed(self, message: str) -> None:
         self._finish_ecu_loading()
@@ -978,6 +997,7 @@ class MainWindow(QMainWindow):
         if ecu_map:
             self._log(f"Using {len(ecu_map)} ECU node pair(s).")
         self.progress.setRange(0, 0)
+        self.progress.show()
         self.run_status.setText("Comparing baselines…")
         self._set_actions_enabled(False)
         self.open_button.setEnabled(False)
@@ -1043,6 +1063,7 @@ class MainWindow(QMainWindow):
     def _completed(self, report_path: Path, summary: dict) -> None:
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
+        self.progress.hide()
         self._set_actions_enabled(True)
         self.open_button.setEnabled(True)
         self.last_report = report_path
@@ -1054,6 +1075,7 @@ class MainWindow(QMainWindow):
     def _failed(self, message: str) -> None:
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
+        self.progress.hide()
         self._set_actions_enabled(True)
         self.run_status.setText("Comparison failed — see log")
         self._log(f"Failed: {message}")
