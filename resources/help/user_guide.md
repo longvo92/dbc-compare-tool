@@ -17,6 +17,6 @@ For folders, pass two folder paths. Add `--include-unchanged` for all entries or
 ## Excel Basics
 
 - Start with **Summary** for totals and **DBC Overview** to check file pairs and parse errors.
-- Use column filters in **Message Details** and **Signal Details** to find a change type, CAN ID or ECU.
+- Filter **Message Details** and **Signal Details** by change type, CAN ID or ECU. Review **Medium/Low** confidence and **Match Reason**.
 - Open **Changed Properties** to review each changed property's OLD and NEW values.
 - For cells listing multiple ECUs, use **Text Filters → Contains**. Close the workbook before regenerating the same report.

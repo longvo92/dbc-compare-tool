@@ -43,11 +43,13 @@ Added or removed DBCs are compared against an empty database so their messages a
 |---|---|---|
 | DBC files | Equal relative path, then global keyword/content assignment | 0.55 |
 | Messages | Equal frame key, then structural similarity | 0.60 |
-| Signals | Exact name, unique complete-property match, then similarity | 0.82; 0.65 for event-like messages |
+| Signals | Exact name, unique complete-property match, then similarity | 0.65; 0.55 for event-like messages |
 
-A renamed message with the same frame key has confidence 1.0. A unique complete-property signal match also has confidence 1.0, after applying ECU mappings to receivers. Duplicate signatures use fallback scoring.
+A renamed message with the same frame key has confidence 1.0. Unique complete-property signal matches are reserved with confidence 1.0, unless a nearby shifted candidate has stronger evidence. ECU mappings apply to receivers before matching. Start-bit shifts up to 8 bits receive partial position credit.
 
-Remaining message and signal candidates use greedy one-to-one matching with ambiguity penalties. Confidence levels are **High** ≥ 0.90, **Medium** ≥ 0.70 and **Low** below 0.70. Event-like fallback signal matches cannot reach High.
+Remaining signals use global one-to-one assignment: maximize eligible pair count, then total similarity. Complete-property matches remain eligible even with weak name similarity. Message fallback matching remains greedy.
+
+Confidence is a review score: **High** ≥ 0.90, **Medium** ≥ 0.70, otherwise **Low**. Signal fallback confidence is `0.89 × similarity`, reduced further when alternatives have similar or better scores. Signal scores are rounded to two decimals before assigning levels. Ambiguity lowers confidence without discarding the selected signal pair.
 
 DBC pairing can match files through shared keywords even when their contents differ. Pairing reasons are recorded in DBC Overview.
 

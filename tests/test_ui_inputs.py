@@ -260,6 +260,45 @@ class GuiInputTests(unittest.TestCase):
         self.assertTrue(all(row[0] == "old.dbc -> new.dbc" and row[2] == "Renamed" for row in rows))
         self.assertEqual(workbook["Changed Properties"].max_row, 1)
 
+    def test_shifted_signal_pairing_confidence_is_exported_by_gui(self):
+        from openpyxl import load_workbook
+
+        from tests.test_signal_pairing import shifted_dbc
+
+        old_folder, new_folder = self.root / "old", self.root / "new"
+        old_folder.mkdir()
+        new_folder.mkdir()
+        for event_like in (False, True):
+            old, new, pairs = shifted_dbc(event_like)
+            self.old.write_text(old, encoding="utf-8")
+            self.new.write_text(new, encoding="utf-8")
+            (old_folder / "bus.dbc").write_text(old, encoding="utf-8")
+            (new_folder / "bus.dbc").write_text(new, encoding="utf-8")
+            for mode in ("files", "folders"):
+                with self.subTest(event_like=event_like, mode=mode):
+                    self._files()
+                    if mode == "folders":
+                        self.window.input_mode.setCurrentIndex(0)
+                        self.window.old_input.setText(str(old_folder))
+                        self.window.new_input.setText(str(new_folder))
+                    report = self.root / "shifted.xlsx"
+                    self.window.output_input.setText(str(report))
+                    with patch(f"{_UI}.QMessageBox.critical") as error:
+                        self.window._run_compare()
+                        self._wait_until(lambda: self.window.run_button.isEnabled())
+                    error.assert_not_called()
+                    self.window.worker.wait(5000)
+                    self.window.export_worker.wait(5000)
+                    workbook = load_workbook(report)
+                    try:
+                        rows = list(workbook["Signal Details"].values)[1:]
+                        self.assertEqual({row[3]: row[4] for row in rows}, pairs)
+                        self.assertTrue(all(row[2] == "Renamed" for row in rows))
+                        self.assertTrue(all(row[6] == ("Low" if event_like else "Medium") for row in rows))
+                        self.assertEqual(workbook["Changed Properties"].max_row - 1, len(pairs))
+                    finally:
+                        workbook.close()
+
     def test_ecu_parse_failure_restores_controls(self):
         self._files()
         self.new.write_text("invalid DBC", encoding="utf-8")
