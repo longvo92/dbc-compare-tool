@@ -12,7 +12,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtCore import QSettings
+    from PySide6.QtCore import QSettings, QTimer
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QDialog
 except ImportError:
@@ -172,6 +172,7 @@ class GuiInputTests(unittest.TestCase):
         self.assertIsNone(self.window.worker.pair_map)
         self.assertTrue(self.window.input_mode.isEnabled())
         self.assertFalse(self.window.manual_pair_button.isEnabled())
+        self.assertTrue(self.window.progress.isHidden())
 
     def test_ecu_discovery_runs_in_worker_and_saves_selected_mapping(self):
         self._files()
@@ -186,6 +187,58 @@ class GuiInputTests(unittest.TestCase):
             self.assertEqual(dialog_type.call_args.args[2], ["NewNode", "Receiver", "Spare"])
         self.assertEqual(self.window._saved_ecu_map, {"OldNode": "NewNode"})
         self.assertEqual(self.window._saved_ecu_inputs, self.window._current_inputs())
+
+    def test_ecu_pairing_stops_loading_before_modal_editor_opens(self):
+        original_exec = EcuPairingDialog.exec
+        old_folder, new_folder = self.root / "old", self.root / "new"
+        old_folder.mkdir()
+        new_folder.mkdir()
+        (old_folder / "bus.dbc").write_text(self.old.read_text(), encoding="utf-8")
+        (new_folder / "bus.dbc").write_text(self.new.read_text(), encoding="utf-8")
+        for mode in ("files", "folders"):
+            for save in (False, True):
+                with self.subTest(mode=mode, save=save):
+                    self._files()
+                    if mode == "folders":
+                        self.window.input_mode.setCurrentIndex(0)
+                        self.window.old_input.setText(str(old_folder))
+                        self.window.new_input.setText(str(new_folder))
+                    self.window.last_report = self.root / "previous.xlsx"
+                    self._save_maps()
+                    self.window._saved_ecu_map = {}
+                    observed = []
+
+                    def inspect_editor(dialog):
+                        observed.append((
+                            self.window.run_status.text(), self.window.progress.maximum(),
+                            self.window.progress.isHidden(), self.window.run_button.isEnabled(),
+                            self.window.old_input.isEnabled(),
+                        ))
+                        if save:
+                            row = next(
+                                row for row in range(dialog.table.rowCount())
+                                if dialog.table.item(row, 0).text() == "OldNode"
+                            )
+                            combo = dialog.table.cellWidget(row, 1)
+                            combo.setCurrentIndex(combo.findData("NewNode"))
+                        QTimer.singleShot(0, dialog._on_save if save else dialog.reject)
+                        return original_exec(dialog)
+
+                    with patch.object(EcuPairingDialog, "exec", inspect_editor):
+                        self.window._open_ecu_pairing()
+                        self.assertEqual(self.window.run_status.text(), "Loading ECU nodes…")
+                        self.assertEqual(self.window.progress.maximum(), 0)
+                        self.assertFalse(self.window.progress.isHidden())
+                        self._wait_until(lambda: self.window.run_button.isEnabled())
+                    self.assertEqual(observed, [("Editing ECU pairing…", 1, True, False, False)])
+                    self.assertEqual(self.window.run_status.text(), "Ready to compare")
+                    self.assertTrue(self.window.progress.isHidden())
+                    self.assertTrue(self.window.open_button.isEnabled())
+                    self.assertEqual(self.window.manual_pair_button.isEnabled(), mode == "folders")
+                    self.assertEqual(
+                        self.window._saved_ecu_map,
+                        {"OldNode": "NewNode"} if save else {},
+                    )
 
     def test_bulk_rename_exports_correct_rows_through_gui(self):
         from openpyxl import load_workbook
@@ -216,6 +269,41 @@ class GuiInputTests(unittest.TestCase):
         error.assert_called_once()
         self.assertTrue(self.window.new_input.isEnabled())
         self.assertFalse(self.window.manual_pair_button.isEnabled())
+        self.assertEqual(self.window.run_status.text(), "Ready to compare")
+        self.assertEqual(self.window.progress.maximum(), 1)
+        self.assertTrue(self.window.progress.isHidden())
+
+    def test_stale_ecu_discovery_restores_idle_state_without_opening_editor(self):
+        self._files()
+        with patch(f"{_UI}.EcuDiscoveryWorker.start"):
+            self.window._open_ecu_pairing()
+        self.window.new_input.setText(str(self.old))
+        with patch(f"{_UI}.EcuPairingDialog") as dialog_type:
+            self.window._on_ecu_nodes_loaded(["OldNode"], ["NewNode"])
+        dialog_type.assert_not_called()
+        self.assertEqual(self.window.run_status.text(), "Ready to compare")
+        self.assertTrue(self.window.progress.isHidden())
+        self.assertTrue(self.window.run_button.isEnabled())
+
+    def test_manual_pairing_editor_restores_previous_status_after_save_or_cancel(self):
+        self.window.old_input.setText(str(self.root))
+        self.window.new_input.setText(str(self.root))
+        for result in (QDialog.DialogCode.Accepted, QDialog.DialogCode.Rejected):
+            with self.subTest(result=result):
+                self.window.run_status.setText("Report ready · 5 changes")
+
+                def inspect_editor():
+                    self.assertEqual(self.window.run_status.text(), "Editing DBC pairing…")
+                    self.assertTrue(self.window.progress.isHidden())
+                    return result
+
+                with patch(f"{_UI}.ManualPairingDialog") as dialog_type:
+                    dialog_type.return_value.exec.side_effect = inspect_editor
+                    dialog_type.return_value.pair_map.return_value = {"old.dbc": "new.dbc"}
+                    self.assertEqual(
+                        self.window._open_manual_pairing(), result == QDialog.DialogCode.Accepted
+                    )
+                self.assertEqual(self.window.run_status.text(), "Report ready · 5 changes")
 
     def test_manual_folder_worker_keeps_ecu_map_and_original_names(self):
         old_folder, new_folder = self.root / "old", self.root / "new"

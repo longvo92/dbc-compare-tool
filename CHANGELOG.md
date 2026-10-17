@@ -10,6 +10,10 @@ for the procedure.
 
 ## [Unreleased]
 
+### Fixed
+
+- Stop showing ECU loading progress once the pairing editor opens; distinguish editing from background work and hide the progress bar when idle. Fit pairing table rows to their selection controls.
+
 ## [0.6.1] - 2026-10-16
 
 ### Fixed

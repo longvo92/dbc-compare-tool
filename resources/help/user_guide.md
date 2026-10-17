@@ -66,7 +66,7 @@ dbc-compare-tool --old old.dbc --new new.dbc --out file_changes.xlsx
 
 ### ECU Node Pairing
 
-Click **ECU Pairing…** to load node names from the selected inputs. For each renamed OLD ECU, select its NEW counterpart and save. Leave other rows on **Keep original name**. This works for both file and folder inputs and applies across the whole comparison; it does not filter the comparison to selected ECUs.
+Click **ECU Pairing…** to load node names from the selected inputs. The footer shows **Loading ECU nodes…** only during discovery, then **Editing ECU pairing…** while the dialog is open. The progress bar appears only while loading, comparing or exporting. For each renamed OLD ECU, select its NEW counterpart and save. Leave other rows on **Keep original name**. This works for both file and folder inputs and applies across the whole comparison; it does not filter the comparison to selected ECUs.
 
 Each NEW node can have only one OLD counterpart. A mapping may not collide with an unmapped OLD node that retains that name. Changing either input or input type clears the saved pairs.
 
