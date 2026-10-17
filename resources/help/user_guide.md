@@ -10,11 +10,9 @@ The tool reports every change between two DBC baselines.
 4. **Include Change Types** — tick the change categories you want in the report (Added / Removed / Modified / Renamed). All are included by default.
    For a complete inventory, tick **Include Unchanged**. It includes every message and signal and disables the change-type filters.
 5. If ECU nodes were renamed, select their OLD/NEW counterparts with **ECU Pairing…** before running.
-6. Click **Run Compare**. In file mode, the selected files form one pair regardless of their names. In folder mode, it uses the file pairs you saved in **Manual Pairing…** when they cover every old file (see below); otherwise it matches files automatically. Progress appears in the Execution Log. When finished, click **Open Report** to view the result in Excel.
+6. Click **Run Compare**. In file mode, the selected files form one pair regardless of their names. In folder mode, it uses the file pairs you saved in **Manual Pairing…** when they cover every old file (see below); otherwise it matches files automatically. When finished, click **Open Report** to view the result in Excel.
 
 The tool remembers your input type, last-used input paths and report path, so the next session starts pre-filled. Saved file and ECU pairs are cleared when either input or input type changes.
-
-Input selection, **Manual Pairing…** and **ECU Pairing…** are grouped under **Baselines**; output and export options are under **Report**. **Run Compare** and **Open Report** stay visible at the bottom when you scroll a small window. Inputs are locked while comparison/export runs, and the footer shows progress, completion or failure.
 
 ---
 
@@ -26,7 +24,7 @@ The Excel report contains the following sheets:
 * **DBC Overview** — one row per DBC file pair: pairing status (`Matched` / `DBC Added` / `DBC Removed` / `DBC Renamed` / `Manually Paired` / `Parse Error`), pairing confidence/reasons, and message/signal counts for both baselines.
 * **Message Details** — every added, removed, modified, or renamed message.
 * **Signal Details** — every added, removed, modified, or renamed signal.
-* **Changed Properties** — before/after table for every changed property, one row per property. Old values highlighted in salmon, new values in green. This replaces the former Property Diff sheet.
+* **Changed Properties** — before/after table for every changed property, one row per property. Old values highlighted in salmon, new values in green.
 
 Rows are color-coded by change type: green = Added, salmon = Removed, yellow = Modified, blue = Renamed. CAN IDs are shown in hexadecimal (e.g. `0x1A3`).
 
@@ -66,7 +64,7 @@ dbc-compare-tool --old old.dbc --new new.dbc --out file_changes.xlsx
 
 ### ECU Node Pairing
 
-Click **ECU Pairing…** to load node names from the selected inputs. The footer shows **Loading ECU nodes…** only during discovery, then **Editing ECU pairing…** while the dialog is open. The progress bar appears only while loading, comparing or exporting. For each renamed OLD ECU, select its NEW counterpart and save. Leave other rows on **Keep original name**. This works for both file and folder inputs and applies across the whole comparison; it does not filter the comparison to selected ECUs.
+Click **ECU Pairing…** to load node names from the selected inputs. For each renamed OLD ECU, select its NEW counterpart and save. Leave other rows on **Keep original name**. This works for both file and folder inputs and applies across the whole comparison; it does not filter the comparison to selected ECUs.
 
 Each NEW node can have only one OLD counterpart. A mapping may not collide with an unmapped OLD node that retains that name. Changing either input or input type clears the saved pairs.
 
@@ -86,7 +84,7 @@ If automatic matching does not pair the files the way you want, choose the pairs
 
 1. Select both baseline folders, then click **Manual Pairing…** to open the pairing dialog.
 2. For each old-baseline file, pick its new-baseline counterpart from the drop-down. New-baseline files not selected in any pair are reported as added.
-3. Click **Save**, then **Run Compare** to export directly. There is no message/signal pairing dialog; their rename detection runs automatically.
+3. Click **Save**, then **Run Compare** to export directly. Message and signal matching runs automatically.
 
 **Run Compare** uses the saved pairing only when every old file is paired; leave any old file on `— Removed (no pair) —` and it falls back to automatic matching for the whole run. Manually matched pairs with different file names appear as **Manually Paired** on the DBC Overview sheet. Each new file can only be used in one pair. Changing either baseline folder discards the saved pairing — open the dialog again.
 
