@@ -149,7 +149,7 @@ Applied after relative-path matching. Threshold: `FILE_RENAME_THRESHOLD = 0.55`.
 - With any shared keyword, `name_score = 0.65 + 0.20 × weighted containment + 0.15 × weighted Jaccard`; otherwise zero. Containment divides shared weight by the smaller total token weight; Jaccard divides it by the union weight.
 - `content_score = 0.55 × frame-key overlap + 0.15 × message-name overlap + 0.25 × structure × frame-key overlap + 0.05 × relative-path SequenceMatcher ratio`. Set overlap divides by the larger inventory count. Standard and extended frames use distinct keys.
 - Final score: `min(1, max(content_score, 0.85 × name_score) + 0.10 × min(content_score, name_score))`.
-- The rectangular Hungarian algorithm uses the smaller inventory as rows and maximizes total accepted-pair score. Below-threshold pairs and unmatched dummy slots have zero score. Each old/new file is used at most once; this replaces greedy selection of the strongest individual pair.
+- The rectangular Hungarian algorithm uses the smaller inventory as rows and maximizes total accepted-pair score. Below-threshold pairs and unmatched dummy slots have zero score. Each old/new file is used at most once.
 
 Shared keywords can pair entirely different content, including empty databases. This is a deliberately permissive heuristic, not a probability of identity. Pairing reasons are exposed in progress logs and DBC Overview; manual DBC pairing can override the result. No Qt or extra dependency is required.
 
@@ -230,20 +230,7 @@ once (greedy one-to-one).
 
 Confidence levels shown in the UI and report: **High** ≥ 0.90, **Medium** ≥ 0.70, otherwise **Low**.
 
-## Validation Status
-
-Earlier versions were exercised against real project DBC baselines. Message and signal rename thresholds remain at 0.60 and 0.82 (0.65 for event-like messages). The new global DBC keyword matcher keeps a 0.55 acceptance threshold but changes its scoring; its behavior is covered by synthetic inventory tests and CLI/GUI smoke checks, and still needs real-baseline validation.
-
-What that field testing did **not** cover yet — these remain unvalidated outside the unit suite:
-
-| Area | Status |
-|---|---|
-| CAN FD databases | Not exercised on real baselines |
-| Extended / mixed frame IDs | Unit-tested only (`TestExtendedStandardFrameCollision` covers a standard frame hidden by an extended twin) |
-| Multiplexed signals | Parsed and carried through comparison, but not exercised on real multiplexed baselines |
-| Vendor attributes (`BA_`) beyond cycle time, very large databases | Not exercised |
-
-### What the suite covers
+## Test Coverage
 
 Tests use `unittest`; GUI tests are optional when Qt is not installed:
 
@@ -251,6 +238,7 @@ Tests use `unittest`; GUI tests are optional when Qt is not installed:
 |---|---|
 | `test_parser.py` | Parsing, including byte order and value type against a mixed-endian fixture |
 | `test_comparator.py`, `test_message_rename.py`, `test_rename.py` | Comparison and rename scoring |
+| `test_bulk_rename.py` | Bulk signal renames and DBC display labels through the engine and CLI |
 | `test_file_inputs.py`, `test_ecu_pairing.py` | Direct file inputs, CLI mapping validation, mapped routing identities and rename scoring |
 | `test_manual_pairing.py`, `test_dbc_pairing.py` | Manual DBC pairing, keyword scoring, global assignment and report evidence |
 | `test_value_and_comment.py` | `VAL_` and `CM_` comparison |
@@ -260,31 +248,9 @@ Tests use `unittest`; GUI tests are optional when Qt is not installed:
 | `test_ui_inputs.py` | File/folder input modes, ECU pairing, saved-state invalidation and comparison workers |
 | `test_release_check.py` | The release gate, including against the real project files |
 
-The suite was checked by mutation rather than by coverage percentage: 26 deliberate defects were
-injected across the engine, the report writer and the models, and every one of them turned the
-suite red. That pass is what added `test_report.py` — before it, the writer could raise on save
-with the suite still green, which a release build would then have shipped.
+## Constraints
 
-## Known Risks
-
-- `BA_` attributes other than `GenMsgCycleTime` are not read at all, so a project that encodes
-  meaning in custom attributes will see no diff for them. Surfacing one means extending the parser,
-  the models, and the Changed Properties sheet.
-- CAN FD handling may still need project-specific interpretation — see the table above.
-- The rename thresholds are a deliberate trade-off: at 0.60, `MessageRenameDetector` favours missing
-  a CAN-ID-changed rename (reported as Removed + Added) over inventing a wrong one. Field use has not
-  shown a reason to move it, but a project with heavy simultaneous ID-and-name churn may want it lower.
+- `BA_` attributes other than `GenMsgCycleTime` are not extracted into the comparison models, so changes to custom attributes are not reported.
+- Rename detection uses heuristic thresholds. A CAN-ID-changed message below the 0.60 threshold is reported as Removed + Added.
 - Message/signal matching is automatic, with no manual pairing or rejection dialog. Review heuristic matches in the report; use manual DBC pairing when file counterparts need correction.
-- There is exactly one rename change type, `Renamed`, graded by confidence level. An earlier
-  `Possible Rename` type for ambiguous matches was removed once the confidence level made it
-  redundant; do not reintroduce a second change type for uncertainty, since it splits the same
-  information across two columns and every consumer of `change_type` then has to know about both.
-
-## Incremental Roadmap
-
-1. Core parser, comparison, rename detection, and Excel report. *(done)*
-2. Desktop UI workflow. *(done)*
-3. Message rename detection for CAN-ID changes, and value table/comment comparison. *(done)*
-4. Real-project validation of the rename thresholds. *(done — thresholds unchanged)*
-5. Coverage for the gaps listed under Validation Status, starting with CAN FD and multiplexed
-   baselines.
+- Rename changes use `Renamed`; uncertainty is recorded in confidence levels and match reasons.

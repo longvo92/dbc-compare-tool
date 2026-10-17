@@ -215,7 +215,7 @@ The desktop app and the CLI share the same engine, and that engine has no UI dep
 
 - [User Guide](resources/help/user_guide.md) — step-by-step usage, also in the app's Help menu
 - [Changelog](CHANGELOG.md) — every released version, also in the app's Help menu
-- [Architecture](docs/architecture.md) — layers, data flow, rename scoring weights, validation status
+- [Architecture](docs/architecture.md) — layers, data flow, rename scoring weights, test coverage and constraints
 
 ## Contributing
 
