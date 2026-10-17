@@ -10,6 +10,8 @@ for the procedure.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-17
+
 ### Fixed
 
 - Detect likely signal renames when names and start bits change slightly; keep ambiguous pairs with lower confidence and review reasons instead of dropping them.
