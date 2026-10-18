@@ -1,290 +1,111 @@
 # Architecture
 
-## Goals
+The CLI and PySide6 GUI share a comparison engine and Excel writer. `core/` and `report/` run without Qt. Python 3.9+ is required.
 
-This project is a local Windows desktop application for automotive engineers comparing DBC releases. The core comparison logic is kept independent from the UI so it can be tested and reused from CLI.
+## Components
 
-## Layers
+Paths below are relative to `src/dbc_compare_tool/`.
 
-1. Parser
-   - Reads `.dbc` files through cantools.
-   - Extracts messages, signals, multiplexing metadata, extended-frame state, value tables (`VAL_`), comments (`CM_`), and common message cycle-time attributes.
-   - Keeps parsed output in small dataclasses.
-
-2. Comparison Engine
-   - `compare_paths` accepts two folders or two `.dbc` files; mixed inputs are rejected. `compare_files` treats the selected files as an explicit pair regardless of names or content.
-   - Discovers `.dbc` files recursively for folder inputs.
-   - Compares files with the same relative path first.
-   - Pairs old-only and new-only `.dbc` files using inventory-weighted keywords and content, then solves a maximum-score one-to-one assignment (`core/pairing.py`).
-   - Matches messages by frame key first; still-unmatched messages run through structural rename detection before being treated as added/removed.
-   - Compares value tables and comments as regular properties, surfaced in the Changed Properties sheet.
-   - `DbcComparator(ecu_map={old_node: new_node})` pairs renamed ECU identities for Tx/Rx comparison and file/message/signal rename scoring. Original models remain unchanged for report context and displayed property values. Node discovery includes declared nodes and routing references, excluding the undefined-node placeholder.
-   - ECU mappings must be one-to-one, reference nodes present in their selected inputs and avoid collisions with unmapped OLD nodes. The result records the mapping; filtering preserves it.
-   - `DbcComparator(include_unchanged=True)` retains exact matches as `Unchanged`; default results remain changes only. Each detail entry carries OLD/NEW parent message and signal references for report context. Unchanged counts are excluded from `Total Changes`.
-   - Accepts a caller-supplied pairing map (`compare_manual`) as an alternative to automatic file pairing.
-   - `filter_result` retains requested change types and always preserves file pairs. Include Unchanged bypasses filtering.
-
-3. Rename Detection Engine
-   - Messages with the same frame key and a different name are exact renames (confidence 1.0).
-   - Messages whose frame key also changed are matched via `MessageRenameDetector`, a structural scorer over DLC, transmitter, cycle time, signal count, and signal-layout overlap (name similarity is minor supporting evidence).
-   - Signals are compared inside an already-matched message pair — which includes a pair matched by message rename, so the two messages may carry different CAN IDs. After exact-name matching, `SignalRenameDetector` reserves unique complete-property matches before scoring the remaining candidates, with a relaxed name-driven mode for Event Matrix-style messages.
-   - DBC file pairing combines deterministic keyword/content scoring with global assignment. Message/signal rename detection remains automatic in both interfaces.
-
-4. Report Generator
-   - Writes a single Excel workbook; shared styling lives in `report/_style.py`.
-   - Five sheets in order: `Summary`, `DBC Overview`, `Message Details`, `Signal Details`, and
-     `Changed Properties`.
-   - Detail sheets retain identity, OLD/NEW Tx/Rx, frame IDs, confidence and match reasons. They omit technical property snapshots and repeated diff descriptions. Message Rx aggregates signal receivers. Summary records report mode, skipped parse-error count and selected ECU mappings. Changed Properties contains only actual property deltas.
-
-5. UI Layer
-   - PySide6 desktop UI with an application-wide stylesheet.
-   - Groups input type (Folders/Files), paths, manual DBC pairing and ECU pairing under Baselines, with output/export options under Report. Manual DBC pairing is disabled for direct files. Changing paths or mode invalidates saved file and ECU maps. The footer keeps Run Compare and Open Report visible. Inputs are locked while workers run.
-   - The Baseline Compare workflow has its own Execution Log (`log_view`, cleared
-     at the start of every run).
-   - The controls sit in a `QScrollArea` so a small window scrolls instead of squeezing every
-     group until its content is unreadable, and the primary action stays outside that scroll area so
-     it is always reachable.
-   - Runs comparison, pairing, and export on worker threads to keep the UI responsive.
-   - Persists input type, last-used input paths and the report path via
-     `QSettings("DbcCompareTool", "DBCCompareTool")` (Windows registry).
-   - Help > Changelog renders `CHANGELOG.md`. That file lives at the repository root, which no build
-     ships, so `scripts/build.py` copies it in beside the other resources and `_changelog_path()`
-     falls back to the root copy in a source checkout.
-
-The dependency direction is one-way: `ui` and `cli` both import `core` and `report`, and nothing
-under `core` or `report` imports either of them. That is what lets CI run the full comparison with
-`cantools` and `openpyxl` installed but no `PySide6`. GUI tests skip when Qt is unavailable; a separate Windows CI job runs them with Qt installed.
-
-## Entry Points
-
-| Entry point | Module | Notes |
-|---|---|---|
-| `dbc-compare-tool-gui`, `python -m dbc_compare_tool` | `ui/main_window.py` | Desktop app; `__main__.py` forwards to the UI |
-| `dbc-compare-tool`, `python -m dbc_compare_tool.cli` | `cli.py` | `--old`, `--new` require two folders or two files; optional `--out`, `--include-unchanged`, repeated `--ecu-pair OLD=NEW`; exit `0` ok, `1` parse/write failure, `2` invalid inputs/mappings |
-
-For folders, the CLI uses automatic DBC pairing and the GUI also offers manual pairing. Both interfaces accept direct file pairs and ECU node mappings, export directly and automatically detect message/signal renames.
-
-## Build and Release
-
-| Script | Role |
+| Module | Responsibility |
 |---|---|
-| `scripts/build.py` | Builds the one-file `.exe` (PyInstaller, resources bundled) and the `.pyzw` zipapp (resources copied next to it, because `_resource_path()` resolves to the folder containing the archive) |
-| `scripts/release_check.py` | The release gate: version format, `__init__.py` and `pyproject.toml` agreeing with the version being released, `CHANGELOG.md` documenting it as the newest dated section, and nothing left under `[Unreleased]`. Also extracts that section for the GitHub release body |
-
-On Windows, the PyInstaller subprocess receives a PATH containing only the selected Python directory and Windows system directories. Package hooks supply Qt's own DLL locations. This prevents unrelated tools such as Poppler from supplying an incompatible `icuuc.dll`. Startup verification must confirm the main application window: a live process can instead be displaying a fatal-error dialog.
-
-Two workflows, deliberately split by who triggers them:
-
-- `.github/workflows/test.yml` runs on every push and pull request to `main`: the suite plus a CLI
-  comparison of the bundled examples, on Linux and Windows against Python 3.9, 3.10 and 3.12. It installs
-  `cantools` and `openpyxl` only, which is what keeps the no-Qt rule honest. A separate Windows/Python 3.12 job installs the GUI dependencies and runs `test_ui_inputs`.
-- `.github/workflows/release.yml` is `workflow_dispatch` only and refuses to run off `main`. It
-  reads; it never writes to the repository. The default run is a rehearsal — build both artifacts,
-  **start** both of them, upload, stop — and publishing takes an explicit `publish=true`. Starting
-  the artifacts exercises the packaged dependencies, which the source-based unit suite does not cover.
-  The workflow checks process lifetime; also inspect the downloaded EXE's main window to rule out a fatal-error dialog.
-
-`CHANGELOG.md` is the single source for release notes: the app's Help menu, the `Changelog` link in
-`pyproject.toml`, and the GitHub release body all resolve to it.
+| `core/models.py` | Databases, messages, signals and comparison results |
+| `core/parser.py` | Read DBCs with cantools; extract layout, routing, multiplexing, values and comments |
+| `core/discovery.py`, `core/pairing.py` | Find files and select one-to-one DBC pairs |
+| `core/ecu.py` | Discover ECU nodes and validate identity mappings |
+| `core/comparator.py` | Compare file pairs and filter results |
+| `core/rename.py` | Detect message and signal renames |
+| `report/excel.py`, `report/_style.py` | Write and format the Excel workbook |
+| `ui/main_window.py`, `ui/widgets.py` | GUI, pairing dialogs, workers and path settings |
+| `cli.py` | Command-line arguments, comparison and export |
 
 ## Data Flow
 
-```mermaid
-flowchart TD
-    F[old + new DBC files] --> FP[parse explicit file pair]
-    FP --> D
-    A[old + new baseline folders] --> B[discovery.discover_dbc_pairs<br/>rglob, case-insensitive .dbc]
-    B --> C{same relative path?}
-    C -->|yes| P1[parse both files]
-    C -->|no| P2[parse, hold as old-only / new-only]
-    P1 -.parse error.-> X[Parse Error row<br/>remaining files continue]
-    P2 -.parse error.-> X
-    P2 --> E[match_renamed_databases<br/>global assignment, score ≥ 0.55]
-    P1 --> D[compare_databases]
-    E -->|paired| D
-    E -->|unpaired| U[compare_databases against an empty database<br/>DBC Added / DBC Removed]
-    D --> H[match messages by frame key]
-    H -->|leftover| I[MessageRenameDetector ≥ 0.60]
-    H --> J[compare signals per matched message pair]
-    I --> J
-    J --> K[match signals by exact name]
-    K -->|leftover| L[SignalRenameDetector<br/>0.82, or 0.65 when event-like]
-    L --> M[ComparisonResult<br/>message_changes, signal_changes, file_pairs, ecu_map]
-    J --> M
-    U --> M
-    X --> M
-    M --> O[filter_result<br/>selected change types]
-    O --> R[report.excel.write_excel_report<br/>5 sheets]
+1. Validate two folders or two `.dbc` files and any ECU mapping.
+2. Parse the selected files, or discover and pair files from both folders.
+3. Match messages, compare their signals and collect property changes.
+4. Apply report filters and write the workbook.
+
+Added or removed DBCs are compared against an empty database so their messages and signals appear in the detail sheets. Folder parse errors are recorded per file; other files continue. Direct file parse errors stop the run. ECU discovery skips unreadable files in folder mode.
+
+## Comparison Contracts
+
+- `compare_paths` accepts matching input types. `compare_files` treats the two selected files as one explicit pair.
+- `compare_manual` accepts a DBC pairing map. The GUI uses saved manual pairs only when every OLD file is paired; otherwise it uses automatic pairing.
+- A message's frame key is `(can_id, is_extended_frame)`, keeping standard and extended frames distinct.
+- Signals are matched within their paired parent messages.
+- ECU mappings reference existing nodes; selected renames must have distinct targets. Unselected nodes keep their names, even when a rename uses that name as its target. Original names remain in report data.
+- `include_unchanged=True` retains unchanged entries and bypasses change-type filters. `Total Changes` excludes unchanged entries.
+- `filter_result` preserves file pairs and ECU mappings.
+
+## Matching Rules
+
+| Item | Matching order | Fallback threshold |
+|---|---|---|
+| DBC files | Equal relative path, then global keyword/content assignment | 0.55 |
+| Messages | Equal frame key, then structural similarity | 0.60 |
+| Signals | Exact name, unique complete-property match, then similarity | 0.65; 0.55 for event-like messages |
+
+A renamed message with the same frame key has confidence 1.0. Unique complete-property signal matches are reserved with confidence 1.0, unless a nearby shifted candidate has stronger evidence. ECU mappings apply to receivers before matching. Start-bit shifts up to 8 bits receive partial position credit.
+
+Remaining signals use global one-to-one assignment: maximize eligible pair count, then total similarity. Complete-property matches remain eligible even with weak name similarity. Message fallback matching remains greedy.
+
+Confidence is a review score: **High** ≥ 0.90, **Medium** ≥ 0.70, otherwise **Low**. Signal fallback confidence is `0.89 × similarity`, reduced further when alternatives have similar or better scores. Signal scores are rounded to two decimals before assigning levels. Ambiguity lowers confidence without discarding the selected signal pair.
+
+DBC pairing can match files through shared keywords even when their contents differ. Pairing reasons are recorded in DBC Overview.
+
+Scoring constants and formulas are defined in [pairing.py](../src/dbc_compare_tool/core/pairing.py) and [rename.py](../src/dbc_compare_tool/core/rename.py).
+
+## Report
+
+The workbook contains `Summary`, `DBC Overview`, `Message Details`, `Signal Details` and `Changed Properties`.
+
+Detail sheets contain identity, CAN IDs, ECU Tx/Rx and match confidence/reasons. Property deltas appear in Changed Properties. Summary records report mode, ECU mappings and skipped parse errors. DBC Overview retains file paths; detail display labels use basenames.
+
+## GUI and Entry Points
+
+Comparison, ECU discovery and export use workers. Input changes invalidate saved DBC and ECU pairing. Input type and paths are stored through `QSettings("DbcCompareTool", "DBCCompareTool")`.
+
+| Entry point | Target |
+|---|---|
+| `dbc-compare-tool-gui`, `python -m dbc_compare_tool` | `ui.main_window:main` |
+| `dbc-compare-tool`, `python -m dbc_compare_tool.cli` | `cli:main` |
+
+CLI exit codes: `0` completed, `1` parse/write failure, `2` invalid input or mapping. A folder comparison can complete with skipped parse errors.
+
+## Verification
+
+After [source installation](../README.md#install-from-source), run from the repository folder:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install ruff pyinstaller
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m dbc_compare_tool.cli --old examples/old --new examples/new --out "$env:TEMP\dbc-smoke.xlsx"
 ```
 
-Two details of that flow are easy to miss. An added or removed `.dbc` still goes through
-`compare_databases`, paired against an empty `DbcDatabase`, which is how all of its messages and
-signals reach the detail sheets instead of only the overview row. And a parse failure is contained
-per file in folder mode: the file becomes a `Parse Error` row in `file_pairs` and every other file is still compared. Direct file parse errors stop the run; there is no other pair to continue with. ECU discovery skips unreadable files in folder mode, matching the comparison's partial-report behavior.
+Tests cover parsing, comparison, pairing, renames, reports, GUI and release checks. GUI tests skip without Qt. CI runs engine tests on Linux/Windows with Python 3.9, 3.10 and 3.12, plus a Windows/Python 3.12 GUI job.
 
-## Rename Strategy
+## Build and Release
 
-DBC file pairing locks equal relative paths first. Remaining databases are profiled once and indexed by keywords, frame keys and message names. Only pairs sharing evidence are scored; a global maximum-score assignment selects the combination, with dummy slots allowing unmatched files. Sorting relative paths makes tied results deterministic. Filename/folder keywords can be sufficient even without shared CAN IDs or messages.
+```powershell
+.\.venv\Scripts\python.exe scripts/build.py
+```
 
-Message rename detection prefers frame key equality; when the frame key also changes, unmatched messages fall back to `MessageRenameDetector` structural scoring (threshold 0.60).
-
-Signal rename detection matches by **exact name** first. `SignalRenameDetector` then groups the remaining signals by every property returned by `Signal.comparable_properties()`, applying selected ECU mappings to receivers. A signature present exactly once on each side is reserved as a rename with confidence 1.0 (`High`). This includes bit position, multiplexing, ranges, value tables and comments; layout alone is insufficient. Duplicate full signatures are not treated as exact matches. Remaining signals are scored and resolved with greedy one-to-one matching. `Signal.signal_key()` (`start_bit`, `length`) is used afterwards only to word leftover add/remove descriptions.
-
-`DBC File` display labels contain only the old and new basenames, joined by ` -> ` (or one basename for an unpaired file). Relative/absolute paths are retained separately in `FilePairSummary` and DBC Overview; discovery and pairing still operate on full relative paths. Duplicate basenames may therefore share a display label.
-
-### Frame key
-
-Throughout the engine a message is identified by its **frame key** — the tuple `(can_id, is_extended_frame)`, not the raw CAN ID. The parser strips the extended-frame flag (`0x80000000`) from the ID it stores, so a standard frame and an extended frame can collapse onto the same number; keeping the flag in the key is what keeps them distinct.
-
-## Scoring Reference
-
-Message/signal rename scores are weighted sums capped at 1.0. DBC file scoring combines two evidence scores. Keep this reference in sync with the constants in source.
-
-### DBC file pairing — `core/pairing.py`
-
-Applied after relative-path matching. Threshold: `FILE_RENAME_THRESHOLD = 0.55`.
-
-- Tokenize filename and parent folders, splitting camel case and separators; preserve channel numbers such as `CAN1`. Ignore generic words, standalone numbers, calendar dates and revision tokens (`v2`, `rev3`, etc.). Filename token strength is 1.0; folder token strength is 0.35.
-- Weight each token by `1 + log((inventory size + 1) / (files containing token + 1))`, over both remaining inventories. Shared rare keywords therefore distinguish files more strongly.
-- With any shared keyword, `name_score = 0.65 + 0.20 × weighted containment + 0.15 × weighted Jaccard`; otherwise zero. Containment divides shared weight by the smaller total token weight; Jaccard divides it by the union weight.
-- `content_score = 0.55 × frame-key overlap + 0.15 × message-name overlap + 0.25 × structure × frame-key overlap + 0.05 × relative-path SequenceMatcher ratio`. Set overlap divides by the larger inventory count. Standard and extended frames use distinct keys.
-- Final score: `min(1, max(content_score, 0.85 × name_score) + 0.10 × min(content_score, name_score))`.
-- The rectangular Hungarian algorithm uses the smaller inventory as rows and maximizes total accepted-pair score. Below-threshold pairs and unmatched dummy slots have zero score. Each old/new file is used at most once; this replaces greedy selection of the strongest individual pair.
-
-Shared keywords can pair entirely different content, including empty databases. This is a deliberately permissive heuristic, not a probability of identity. Pairing reasons are exposed in progress logs and DBC Overview; manual DBC pairing can override the result. No Qt or extra dependency is required.
-
-Structure score per shared frame key — `_common_message_structure_score`:
-
-| Criterion | Weight |
+| Output | Resources |
 |---|---|
-| DLC equal | 0.20 |
-| Transmitter equal | 0.15 |
-| Cycle time equal | 0.10 |
-| Signal count equal | 0.15 |
-| Signal-layout Jaccard | 0.40 × overlap |
+| `dist/DbcCompareTool-<version>.exe` | Bundled; no Python installation needed |
+| `dist/DbcCompareTool-<version>.pyzw` | Ship with `dist/resources/`; requires Python and runtime dependencies |
 
-Note the cycle-time check here is a plain equality test, unlike the one in `MessageRenameDetector`
-below: two messages that both have an *unknown* cycle time count as matching and collect the 0.10.
-That is deliberate for file pairing, where the comparison is over many messages at once and a shared
-absence is still weak evidence of the same file, but it does mean a database with no
-`GenMsgCycleTime` at all scores slightly higher than the criterion suggests.
+The build copies CHANGELOG.md into resources for the Help menu. Windows packaging restricts DLL search paths to Python and Windows system directories; Qt hooks add package DLLs. Verify the main window opens when checking a build.
 
-Signal layout is the set of `(start_bit, length, byte_order)` tuples of a message's signals, compared
-with a Jaccard index (`|A ∩ B| / |A ∪ B|`; two empty sets score 1.0, one empty set scores 0.0).
+`scripts/release_check.py` requires matching versions in `pyproject.toml` and `__init__.py`, a dated changelog section and an empty `[Unreleased]`. It can extract release notes with `--notes`.
 
-### Message rename — `MessageRenameDetector` (rename.py)
+`.github/workflows/release.yml` runs manually from `main`, builds and starts both artifacts, then uploads them. Publishing requires `publish=true`.
 
-Reached only when the frame ID changed too: a message with the same frame key and a different name is
-already an exact rename with confidence 1.0 and never goes through scoring. Threshold: **0.60**.
+## Constraints
 
-| Criterion | Weight |
-|---|---|
-| CAN ID equal | 0.35 |
-| Signal-layout Jaccard | 0.22 × overlap |
-| DLC equal | 0.12 |
-| Signal count equal | 0.10 |
-| Transmitter equal | 0.08 |
-| Cycle time equal | 0.08 (skipped when the old cycle time is unknown) |
-| Name similarity | 0.05 × ratio |
-
-### Signal rename — `SignalRenameDetector` (rename.py)
-
-Applied per matched message pair, to the signals left over after exact-name and unique complete-property matching. Two weight
-sets; the parent message decides which one is used — the event-like set is selected when *either*
-the old or the new message is event-like.
-
-| Criterion | Normal (threshold **0.82**) | Event-like (threshold **0.65**) |
-|---|---|---|
-| Start bit equal | 0.18 | 0.06 |
-| Length equal | 0.18 | 0.06 |
-| Byte order equal | 0.10 | 0.05 |
-| Signedness equal | 0.06 | 0.03 |
-| Factor equal | 0.12 | 0.04 |
-| Offset equal | 0.12 | 0.04 |
-| Unit equal | 0.08 | 0.04 |
-| Receivers equal | 0.11 | 0.06 |
-| Name similarity | 0.05 × ratio | **0.50 × ratio** |
-
-The event-like column deliberately inverts the priority: in an Event Matrix message dozens of signals
-share common technical properties, so the name carries more of the fallback decision. Structural
-checks there total 0.38, so an event-like fallback match maxes out at 0.88 and cannot be reported as
-High confidence. Unique complete-property matches bypass this scoring and remain High.
-
-A message counts as event-like (`EventMessageDetector.is_event_like`) when **all** of: it has at least
-5 signals, at least 70% of them are ≤ 4 bits, and at least 60% share the same
-`(length, byte_order, factor, offset, unit)` signature.
-
-### Matching procedure and confidence
-
-After reserving unique complete-property signal pairs, all remaining old×new pairs are scored and those at or above the threshold become candidates. Ambiguity is then
-penalised symmetrically: when *n* items on one side compete for the same item on the other — several
-old items for one new item, or several new items for one old item — each competing candidate loses
-`0.15 × (n − 1)` and gains an "Ambiguous" reason. A candidate must still meet the detector threshold
-after this penalty; marginal ambiguous pairs are therefore reported as Removed + Added instead of an
-unsupported rename.
-
-The reduced score is held at the 0.70 Medium floor but never raised above the candidate's own
-unadjusted score. This matters for event-like signals, whose 0.65 threshold sits below that floor.
-Remaining candidates are taken in descending score order with each old and each new item used at most
-once (greedy one-to-one).
-
-Confidence levels shown in the UI and report: **High** ≥ 0.90, **Medium** ≥ 0.70, otherwise **Low**.
-
-## Validation Status
-
-Earlier versions were exercised against real project DBC baselines. Message and signal rename thresholds remain at 0.60 and 0.82 (0.65 for event-like messages). The new global DBC keyword matcher keeps a 0.55 acceptance threshold but changes its scoring; its behavior is covered by synthetic inventory tests and CLI/GUI smoke checks, and still needs real-baseline validation.
-
-What that field testing did **not** cover yet — these remain unvalidated outside the unit suite:
-
-| Area | Status |
-|---|---|
-| CAN FD databases | Not exercised on real baselines |
-| Extended / mixed frame IDs | Unit-tested only (`TestExtendedStandardFrameCollision` covers a standard frame hidden by an extended twin) |
-| Multiplexed signals | Parsed and carried through comparison, but not exercised on real multiplexed baselines |
-| Vendor attributes (`BA_`) beyond cycle time, very large databases | Not exercised |
-
-### What the suite covers
-
-Tests use `unittest`; GUI tests are optional when Qt is not installed:
-
-| Module | Layer |
-|---|---|
-| `test_parser.py` | Parsing, including byte order and value type against a mixed-endian fixture |
-| `test_comparator.py`, `test_message_rename.py`, `test_rename.py` | Comparison and rename scoring |
-| `test_file_inputs.py`, `test_ecu_pairing.py` | Direct file inputs, CLI mapping validation, mapped routing identities and rename scoring |
-| `test_manual_pairing.py`, `test_dbc_pairing.py` | Manual DBC pairing, keyword scoring, global assignment and report evidence |
-| `test_value_and_comment.py` | `VAL_` and `CM_` comparison |
-| `test_robustness.py` | Frame-key collisions, parse-error resilience, discovery, encodings |
-| `test_report.py` | The Excel writer, written to disk and read back with openpyxl |
-| `test_impact_report.py` | Full inventory, ECU context, compact detail sheets and changed-property output |
-| `test_ui_inputs.py` | File/folder input modes, ECU pairing, saved-state invalidation and comparison workers |
-| `test_release_check.py` | The release gate, including against the real project files |
-
-The suite was checked by mutation rather than by coverage percentage: 26 deliberate defects were
-injected across the engine, the report writer and the models, and every one of them turned the
-suite red. That pass is what added `test_report.py` — before it, the writer could raise on save
-with the suite still green, which a release build would then have shipped.
-
-## Known Risks
-
-- `BA_` attributes other than `GenMsgCycleTime` are not read at all, so a project that encodes
-  meaning in custom attributes will see no diff for them. Surfacing one means extending the parser,
-  the models, and the Changed Properties sheet.
-- CAN FD handling may still need project-specific interpretation — see the table above.
-- The rename thresholds are a deliberate trade-off: at 0.60, `MessageRenameDetector` favours missing
-  a CAN-ID-changed rename (reported as Removed + Added) over inventing a wrong one. Field use has not
-  shown a reason to move it, but a project with heavy simultaneous ID-and-name churn may want it lower.
-- Message/signal matching is automatic, with no manual pairing or rejection dialog. Review heuristic matches in the report; use manual DBC pairing when file counterparts need correction.
-- There is exactly one rename change type, `Renamed`, graded by confidence level. An earlier
-  `Possible Rename` type for ambiguous matches was removed once the confidence level made it
-  redundant; do not reintroduce a second change type for uncertainty, since it splits the same
-  information across two columns and every consumer of `change_type` then has to know about both.
-
-## Incremental Roadmap
-
-1. Core parser, comparison, rename detection, and Excel report. *(done)*
-2. Desktop UI workflow. *(done)*
-3. Message rename detection for CAN-ID changes, and value table/comment comparison. *(done)*
-4. Real-project validation of the rename thresholds. *(done — thresholds unchanged)*
-5. Coverage for the gaps listed under Validation Status, starting with CAN FD and multiplexed
-   baselines.
+- Custom `BA_` attributes other than `GenMsgCycleTime` are not compared.
+- Rename detection is heuristic; unmatched items are reported as Removed or Added.
+- Manual pairing applies to DBC files and ECU nodes. Message/signal pairing remains automatic.
+- Duplicate basenames can share a detail-sheet display label; use DBC Overview to identify paths.

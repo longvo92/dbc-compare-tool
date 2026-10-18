@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import replace
+from unittest.mock import patch
 
 from dbc_compare_tool.core.models import Message, Signal
 from dbc_compare_tool.core.rename import (
@@ -53,7 +54,7 @@ class TestSignalRenameDetector(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0].confidence_level, "High")
 
-    def test_one_to_one_greedy(self):
+    def test_one_to_one_pairing(self):
         old1 = _make_signal("A", start_bit=0, length=8)
         old2 = _make_signal("B", start_bit=8, length=8)
         new1 = _make_signal("X", start_bit=0, length=8)
@@ -115,6 +116,94 @@ class TestSignalRenameDetector(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         self.assertLess(matches[0].confidence, 1.0)
 
+    def test_slight_name_and_start_bit_changes_are_medium_confidence(self):
+        old = _make_signal("BatteryVoltage", start_bit=16, length=16, factor=0.01, unit="V")
+        for event_like in (False, True):
+            for shift in (-8, -1, 1, 4, 8):
+                with self.subTest(event_like=event_like, shift=shift):
+                    new = replace(old, name="BatteryVoltageRaw", start_bit=old.start_bit + shift)
+                    match, = SignalRenameDetector(is_event_like=event_like).match([old], [new])
+                    self.assertEqual(match.confidence_level, "Medium")
+                    self.assertLess(match.confidence, 0.90)
+                    self.assertTrue(any("Start bit shifted" in reason for reason in match.reasons))
+
+    def test_confidence_falls_with_weaker_names_and_position_evidence(self):
+        old = _make_signal("BatteryVoltage", start_bit=16)
+        close = replace(old, name="BatteryVoltageRaw", start_bit=17)
+        distant = replace(close, start_bit=40)
+        weaker_name = replace(close, name="Voltage")
+        close_match, = self.detector.match([old], [close])
+        distant_match, = self.detector.match([old], [distant])
+        weak_match, = self.detector.match([old], [weaker_name])
+        self.assertGreater(close_match.confidence, distant_match.confidence)
+        self.assertGreater(close_match.confidence, weak_match.confidence)
+
+    def test_weak_but_eligible_pair_is_retained_with_low_confidence(self):
+        old = _make_signal("State", start_bit=8)
+        new = replace(old, name="Temperature", start_bit=32)
+        match, = self.detector.match([old], [new])
+        self.assertEqual(match.confidence_level, "Low")
+        self.assertTrue(any("review recommended" in reason for reason in match.reasons))
+
+    def test_confidence_level_agrees_with_displayed_score_at_medium_boundary(self):
+        old, new = _make_signal("Old", 0), _make_signal("New", 1)
+        for score, expected_level in ((0.694, "Low"), (0.699, "Medium"), (0.704, "Medium")):
+            with self.subTest(score=score):
+                with patch.object(self.detector, "score", return_value=(score / 0.89, ())):
+                    match, = self.detector.match([old], [new])
+                self.assertEqual(match.confidence_level, expected_level)
+                self.assertEqual(match.confidence, float(f"{match.confidence:.2f}"))
+
+    def test_bulk_shift_does_not_lock_renames_to_a_neighboring_old_layout(self):
+        old = [_make_signal(f"Event_Door_{i}", start_bit=i, length=1) for i in range(8)]
+        new = [replace(signal, name=signal.name + "_New", start_bit=signal.start_bit + 1) for signal in old]
+        for event_like in (False, True):
+            for targets in (new, list(reversed(new))):
+                with self.subTest(event_like=event_like, reversed=targets != new):
+                    matches = SignalRenameDetector(is_event_like=event_like).match(old, targets)
+                    self.assertEqual({(m.old.name, m.new.name) for m in matches},
+                                     {(signal.name, signal.name + "_New") for signal in old})
+                    self.assertTrue(all(m.confidence < 0.90 for m in matches))
+
+    def test_global_assignment_prioritizes_coverage_over_strongest_pair(self):
+        old = [_make_signal("A", 0), _make_signal("B", 8)]
+        new = [_make_signal("X", 1), _make_signal("Y", 9)]
+        scores = {("A", "X"): 0.95, ("A", "Y"): 0.70,
+                  ("B", "X"): 0.80, ("B", "Y"): 0.10}
+        with patch.object(self.detector, "score", side_effect=lambda a, b: (scores[a.name, b.name], ())):
+            matches = self.detector.match(old, new)
+        self.assertEqual({(m.old.name, m.new.name) for m in matches}, {("A", "Y"), ("B", "X")})
+        self.assertTrue(all(m.confidence_level == "Low" for m in matches))
+
+    def test_unequal_inventories_and_ties_are_deterministic(self):
+        old = [_make_signal("A", 0), _make_signal("B", 8), _make_signal("C", 16)]
+        new = [_make_signal("X", 1), _make_signal("Y", 9)]
+        with patch.object(self.detector, "score", return_value=(0.75, ())):
+            first = self.detector.match(old, new)
+            second = self.detector.match(reversed(old), reversed(new))
+        self.assertEqual([(m.old.name, m.new.name) for m in first], [(m.old.name, m.new.name) for m in second])
+        self.assertEqual(len(first), 2)
+        self.assertEqual(len({id(m.old) for m in first}), 2)
+        self.assertEqual(len({id(m.new) for m in first}), 2)
+
+    def test_empty_inventory_has_no_pairs(self):
+        self.assertEqual(self.detector.match([], [_make_signal("New")]), [])
+        self.assertEqual(self.detector.match([_make_signal("Old")], []), [])
+
+    def test_duplicate_event_properties_remain_pairable_with_low_confidence(self):
+        old = [_make_signal("AB"), _make_signal("CD")]
+        new = [_make_signal("XY"), _make_signal("ZW")]
+        matches = SignalRenameDetector(is_event_like=True).match(old, new)
+        self.assertEqual(len(matches), 2)
+        self.assertTrue(all(match.confidence_level == "Low" for match in matches))
+
+    def test_deferred_exact_pairs_stay_eligible_when_names_are_unrelated(self):
+        old = [_make_signal("AB", 0), _make_signal("CD", 1)]
+        new = [_make_signal("EF", 0), _make_signal("AG", 1)]
+        matches = SignalRenameDetector(is_event_like=True).match(old, new)
+        self.assertEqual(len(matches), 2)
+        self.assertEqual({(match.old.start_bit, match.new.start_bit) for match in matches}, {(0, 0), (1, 1)})
+
 
 class TestSignalRenameDetectorEventMode(unittest.TestCase):
     def test_event_mode_uses_lower_threshold(self):
@@ -130,22 +219,25 @@ class TestSignalRenameDetectorEventMode(unittest.TestCase):
 
 
 class TestAmbiguityAdjustment(unittest.TestCase):
-    def test_marginal_two_old_rivals_for_one_new_are_rejected(self):
+    def test_two_old_rivals_for_one_new_keep_a_low_confidence_pair(self):
         detector = SignalRenameDetector()
         old1 = _make_signal("A", start_bit=0, length=8)
         old2 = _make_signal("B", start_bit=0, length=8)  # same layout as old1
         new = _make_signal("X", start_bit=0, length=8)
         matches = detector.match([old1, old2], [new])
-        self.assertEqual(matches, [])
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].confidence_level, "Low")
+        self.assertTrue(any("Ambiguous" in reason for reason in matches[0].reasons))
 
-    def test_marginal_one_old_rival_for_two_new_are_rejected(self):
-        # Regression: old-side ambiguity used to go undetected.
+    def test_one_old_rival_for_two_new_keeps_a_low_confidence_pair(self):
         detector = SignalRenameDetector()
         old = _make_signal("A", start_bit=0, length=8)
         new1 = _make_signal("X", start_bit=0, length=8)
         new2 = _make_signal("Y", start_bit=0, length=8)
         matches = detector.match([old], [new1, new2])
-        self.assertEqual(matches, [])
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].confidence_level, "Low")
+        self.assertTrue(any("Ambiguous" in reason for reason in matches[0].reasons))
 
     def test_strong_ambiguous_candidate_remains_flagged(self):
         detector = SignalRenameDetector()

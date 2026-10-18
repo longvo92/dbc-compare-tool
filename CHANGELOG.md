@@ -10,6 +10,14 @@ for the procedure.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-18
+
+### Fixed
+
+- Detect likely signal renames when names and start bits change slightly; keep ambiguous pairs with lower confidence and review reasons instead of dropping them.
+- Save partial ECU pairing while other nodes keep their original names, including when a chosen target shares an unchanged OLD node's name.
+- Stop showing ECU loading progress once the pairing editor opens; distinguish editing from background work and hide the progress bar when idle. Fit pairing table rows to their selection controls.
+
 ## [0.6.1] - 2026-10-16
 
 ### Fixed

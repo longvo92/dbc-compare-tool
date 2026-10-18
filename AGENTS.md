@@ -6,6 +6,14 @@
 - Packages live in src/dbc_compare_tool/. Existing dependencies: cantools, openpyxl and optional PySide6; choose additions autonomously and explain them.
 - Keep shared CLI/GUI comparison and report behavior consistent.
 
+## Documentation
+
+- Write short, direct sentences. Lead with the task or result, avoid marketing language, and link to existing guidance instead of repeating it.
+- Keep user guides focused on user tasks, options, constraints, and interpreting results.
+- Do not describe transient GUI status text, progress-bar timing or visibility, widget layout, implementation details, or bug-fix history in user guides.
+- Put implementation details in maintainer documentation and user-visible fixes in CHANGELOG.md. Update a user guide only when usage, options, constraints, or result interpretation changes.
+- Keep architecture documentation focused on the current design, contracts, constraints, and verification entry points. Exclude update history, completed-work lists, validation snapshots, TODOs, and roadmaps.
+
 ## Verification
 Set PYTHONPATH=src in the shell.
 For code changes: python -m unittest discover -s tests -v

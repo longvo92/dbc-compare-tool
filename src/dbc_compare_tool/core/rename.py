@@ -7,6 +7,7 @@ from typing import Generic, Iterable, Protocol, TypeVar
 
 from dbc_compare_tool.core.ecu import receivers_match, transmitters_match
 from dbc_compare_tool.core.models import Message, Signal, jaccard
+from dbc_compare_tool.core.pairing import _maximum_assignment
 
 
 T = TypeVar("T")
@@ -201,8 +202,9 @@ class MessageRenameDetector(GreedyRenameDetector[Message]):
 
 
 class SignalRenameDetector(GreedyRenameDetector[Signal]):
-    threshold = 0.82
-    event_threshold = 0.65  # Lower threshold for event-like messages
+    threshold = 0.65
+    event_threshold = 0.55
+    heuristic_confidence_cap = 0.89
 
     def __init__(self, is_event_like: bool = False, ecu_map: dict[str, str] | None = None) -> None:
         """Initialize the detector for a normal or event-like message.
@@ -229,7 +231,8 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
 
         Repeated scaling or overlapping multiplexed layouts must not penalize a
         pair whose complete properties identify it uniquely on both sides.
-        Duplicate full signatures still go through the ambiguity checks.
+        Remaining signals favor pairing coverage; ambiguity lowers reported
+        confidence without removing an otherwise eligible pair.
         """
         old_list, new_list = list(old_items), list(new_items)
         old_groups: dict[tuple, list[Signal]] = defaultdict(list)
@@ -239,10 +242,37 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
         for signal in new_list:
             new_groups[self._property_key(signal, old=False)].append(signal)
 
+        # Index nearby alternatives with equal non-position properties. A batch
+        # shift can put a renamed signal exactly on its neighbor's old layout.
+        old_positions: dict[tuple, list[Signal]] = defaultdict(list)
+        new_positions: dict[tuple, list[Signal]] = defaultdict(list)
+        for key, group in old_groups.items():
+            properties = tuple(item for item in key if item[0] != "Start Bit")
+            old_positions[properties, group[0].start_bit].extend(group)
+        for key, group in new_groups.items():
+            properties = tuple(item for item in key if item[0] != "Start Bit")
+            new_positions[properties, group[0].start_bit].extend(group)
+
+        def better_shifted_pair(old: Signal, new: Signal, key: tuple) -> bool:
+            score, _ = self.score(old, new)
+            properties = tuple(item for item in key if item[0] != "Start Bit")
+            for shift in range(-8, 9):
+                if not shift:
+                    continue
+                for other in new_positions.get((properties, old.start_bit + shift), ()):
+                    other_score = self.score(old, other)[0]
+                    if other_score >= self.threshold and other_score > score:
+                        return True
+                for other in old_positions.get((properties, new.start_bit + shift), ()):
+                    other_score = self.score(other, new)[0]
+                    if other_score >= self.threshold and other_score > score:
+                        return True
+            return False
+
         exact_matches = []
         for key, old_group in old_groups.items():
             new_group = new_groups.get(key, [])
-            if len(old_group) == len(new_group) == 1:
+            if len(old_group) == len(new_group) == 1 and not better_shifted_pair(old_group[0], new_group[0], key):
                 exact_matches.append(RenameMatch(
                     old_group[0], new_group[0], 1.0, "High",
                     ("All signal properties matched uniquely (after ECU mapping)"
@@ -250,10 +280,72 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
                 ))
         used_old = {id(match.old) for match in exact_matches}
         used_new = {id(match.new) for match in exact_matches}
-        return exact_matches + super().match(
-            (signal for signal in old_list if id(signal) not in used_old),
-            (signal for signal in new_list if id(signal) not in used_new),
+        return exact_matches + self._match_candidates(
+            [signal for signal in old_list if id(signal) not in used_old],
+            [signal for signal in new_list if id(signal) not in used_new],
         )
+
+    def _match_candidates(self, old_list: list[Signal], new_list: list[Signal]) -> list[RenameMatch[Signal]]:
+        if not old_list or not new_list:
+            return []
+        old_list = sorted(old_list, key=lambda signal: signal.name)
+        new_list = sorted(new_list, key=lambda signal: signal.name)
+        old_keys = [self._property_key(signal, old=True) for signal in old_list]
+        new_keys = [self._property_key(signal, old=False) for signal in new_list]
+        candidates: dict[tuple[int, int], tuple[float, tuple[str, ...]]] = {}
+        old_scores: dict[int, list[tuple[int, float]]] = defaultdict(list)
+        new_scores: dict[int, list[tuple[int, float]]] = defaultdict(list)
+        for old_index, old in enumerate(old_list):
+            for new_index, new in enumerate(new_list):
+                score, reasons = self.score(old, new)
+                same_properties = old_keys[old_index] == new_keys[new_index]
+                if score >= self.threshold or same_properties:
+                    if same_properties:
+                        reasons += ("All signal properties matched; identity requires review",)
+                    candidates[old_index, new_index] = score, reasons
+                    old_scores[old_index].append((new_index, score))
+                    new_scores[new_index].append((old_index, score))
+
+        # A whole extra pair outweighs every possible similarity improvement.
+        # Transpose to keep the smaller inventory on the Hungarian row axis.
+        transpose = len(old_list) > len(new_list)
+        rows, columns = (len(new_list), len(old_list)) if transpose else (len(old_list), len(new_list))
+        pair_bonus = rows + 1.0
+        weights = [[0.0] * (columns + rows) for _ in range(rows)]
+        for (old_index, new_index), (score, _) in candidates.items():
+            row, column = (new_index, old_index) if transpose else (old_index, new_index)
+            weights[row][column] = pair_bonus + score
+
+        matches = []
+        for row, column in enumerate(_maximum_assignment(weights)):
+            if column >= columns:
+                continue
+            key = (column, row) if transpose else (row, column)
+            if key not in candidates:
+                continue
+            old_index, new_index = key
+            score, reasons = candidates[key]
+            confidence = score * self.heuristic_confidence_cap
+            rivals = [value for index, value in old_scores[old_index] if index != new_index]
+            rivals.extend(value for index, value in new_scores[new_index] if index != old_index)
+            if rivals:
+                margin = score - max(rivals)
+                penalty = min(0.35, max(0.0, 0.20 - margin))
+                confidence = max(0.0, confidence - penalty)
+                reasons += (f"Ambiguous: {len(rivals)} competing pair(s), score margin {margin:.2f}",)
+            reasons += ("Heuristic signal pairing; review recommended",)
+            # Match the level to the score users see in the Excel report.
+            confidence = round(confidence, 2)
+            matches.append(RenameMatch(
+                old_list[old_index], new_list[new_index], confidence,
+                self.get_confidence_level(confidence), reasons,
+            ))
+        return matches
+
+    @staticmethod
+    def _start_bit_similarity(old: Signal, new: Signal) -> float:
+        distance = abs(old.start_bit - new.start_bit)
+        return 1.0 - distance / 16.0 if distance <= 8 else 0.0
 
     def score(self, old: Signal, new: Signal) -> tuple[float, tuple[str, ...]]:
         if self.is_event_like:
@@ -265,14 +357,14 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
         score = 0.0
         reasons: list[str] = []
         weighted_checks = [
-            (old.start_bit == new.start_bit, 0.18, "Start bit matched"),
-            (old.length == new.length, 0.18, "Length matched"),
-            (old.byte_order == new.byte_order, 0.10, "Byte order matched"),
-            (old.is_signed == new.is_signed, 0.06, "Signedness matched"),
-            (old.factor == new.factor, 0.12, "Factor matched"),
-            (old.offset == new.offset, 0.12, "Offset matched"),
-            (old.unit == new.unit, 0.08, "Unit matched"),
-            (receivers_match(old.receivers, new.receivers, self.ecu_map), 0.11, "Receivers matched"),
+            (old.start_bit == new.start_bit, 0.15, "Start bit matched"),
+            (old.length == new.length, 0.15, "Length matched"),
+            (old.byte_order == new.byte_order, 0.08, "Byte order matched"),
+            (old.is_signed == new.is_signed, 0.04, "Signedness matched"),
+            (old.factor == new.factor, 0.09, "Factor matched"),
+            (old.offset == new.offset, 0.09, "Offset matched"),
+            (old.unit == new.unit, 0.07, "Unit matched"),
+            (receivers_match(old.receivers, new.receivers, self.ecu_map), 0.08, "Receivers matched"),
         ]
         for matched, weight, reason in weighted_checks:
             if matched:
@@ -280,14 +372,17 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
                 reasons.append(reason)
 
         name_score = _name_similarity(old.name, new.name)
-        score += 0.05 * name_score
+        score += 0.25 * name_score
         if name_score >= 0.5:
             reasons.append("Names are similar")
+        if old.start_bit != new.start_bit:
+            score += 0.15 * self._start_bit_similarity(old, new)
+            reasons.append(f"Start bit shifted by {abs(old.start_bit - new.start_bit)} bit(s)")
         return min(score, 1.0), tuple(reasons)
 
     def _score_for_event_message(self, old: Signal, new: Signal) -> tuple[float, tuple[str, ...]]:
         """
-        Conservative scoring for signals in Event Matrix messages.
+        Name-led scoring for signals in Event Matrix messages.
         De-emphasizes common technical properties, emphasizes name similarity.
         """
         score = 0.0
@@ -312,11 +407,14 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
 
         # Name similarity is much more important for event messages
         name_score = _name_similarity(old.name, new.name)
-        score += 0.50 * name_score  # Increased from 0.05 to 0.50
+        score += 0.50 * name_score
         if name_score >= 0.6:
             reasons.append("Names are similar")
         elif name_score >= 0.3:
             reasons.append("Names have some similarity")
+        if old.start_bit != new.start_bit:
+            score += 0.06 * self._start_bit_similarity(old, new)
+            reasons.append(f"Start bit shifted by {abs(old.start_bit - new.start_bit)} bit(s)")
 
         # Event message warning
         reasons_list = list(reasons)
