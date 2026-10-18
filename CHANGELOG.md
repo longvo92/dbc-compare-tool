@@ -10,7 +10,7 @@ for the procedure.
 
 ## [Unreleased]
 
-## [0.6.2] - 2026-10-17
+## [0.6.2] - 2026-10-18
 
 ### Fixed
 
