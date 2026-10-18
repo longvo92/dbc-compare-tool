@@ -1,6 +1,27 @@
+<div align="center">
+
 # DBC Compare Tool
 
+**Compare CAN DBC baselines and review changes in Excel.**
+
+[![CI](https://github.com/longvo92/dbc-compare-tool/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/longvo92/dbc-compare-tool/actions/workflows/test.yml)
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-22A699.svg)](LICENSE)
+
+[Download](https://github.com/longvo92/dbc-compare-tool/releases/latest) · [Quick start](#quick-start) · [Usage](#usage) · [User Guide](resources/help/user_guide.md) · [Changelog](CHANGELOG.md)
+
+</div>
+
 Compare two CAN DBC files or baseline folders and export changes to Excel. Detect added, removed, modified and renamed messages and signals, including value tables and comments.
+
+## Features
+
+| Feature | Use it to |
+|---|---|
+| File or folder comparison | Compare individual DBCs or complete baselines |
+| Rename detection | Find renamed messages and signals with confidence indicators |
+| ECU pairing | Map renamed nodes and review routing changes |
+| Excel reports | Filter changes and inspect OLD/NEW property values |
 
 ![DBC Compare Tool](docs/screenshot_main.png)
 
