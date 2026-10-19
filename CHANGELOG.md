@@ -10,6 +10,8 @@ for the procedure.
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-10-19
+
 ### Fixed
 
 - Remove arrows from added/removed report entries, including DBC inventory counts. Keep message and signal names, including parent message names, in separate OLD/NEW columns.
