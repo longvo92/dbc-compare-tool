@@ -91,14 +91,14 @@ class ImpactReportTests(unittest.TestCase):
     def test_ecu_receivers_and_identity_survive_excel_roundtrip(self):
         workbook = self._report(self._compare())
         message = _rows(workbook["Message Details"])[0]
-        signals = {row["New Signal Name"]: row for row in _rows(workbook["Signal Details"])}
-        self.assertEqual(message["ECU Node Tx (Old)"], "BCM")
-        self.assertEqual(message["ECU Node Rx (New)"], "ECM, IC")
-        self.assertEqual(message["Old Message Name"], "Status")
-        self.assertEqual(message["CAN ID (New)"], "0x64")
-        self.assertEqual(signals["State"]["ECU Node Rx (Old)"], "ECM")
-        self.assertEqual(signals["Speed"]["ECU Node Rx (New)"], "ECM, IC")
-        self.assertEqual(signals["Speed"]["CAN ID (New)"], "0x64")
+        signals = {row["Signal Name"]: row for row in _rows(workbook["Signal Details"])}
+        self.assertEqual(message["ECU Node Tx"], "BCM")
+        self.assertEqual(message["ECU Node Rx"], "ECM, IC")
+        self.assertEqual(message["Message Name"], "Status")
+        self.assertEqual(message["CAN ID"], "0x64")
+        self.assertEqual(signals["State"]["ECU Node Rx"], "ECM")
+        self.assertEqual(signals["Speed"]["ECU Node Rx"], "ECM, IC")
+        self.assertEqual(signals["Speed"]["CAN ID"], "0x64")
         for name in ("Message Details", "Signal Details", "Changed Properties"):
             self.assertEqual(workbook[name].auto_filter.ref, workbook[name].dimensions)
 
@@ -108,13 +108,12 @@ class ImpactReportTests(unittest.TestCase):
         workbook = self._report(self._compare(new=new, full=False))
         message = _rows(workbook["Message Details"])[0]
         signal = _rows(workbook["Signal Details"])[0]
-        self.assertEqual(message["ECU Node Tx (Old)"], "BCM")
-        self.assertEqual(message["ECU Node Tx (New)"], "Gateway")
-        self.assertEqual(message["ECU Node Rx (Old)"], "ECM, IC")
-        self.assertEqual(signal["ECU Node Rx (New)"], "VCU")
+        self.assertEqual(message["ECU Node Tx"], "BCM->Gateway")
+        self.assertEqual(message["ECU Node Rx"], "ECM, IC->VCU")
+        self.assertEqual(signal["ECU Node Rx"], "ECM, IC->VCU")
         diff = next(row for row in _rows(workbook["Changed Properties"]) if row["Property"] == "Receivers")
-        self.assertEqual(diff["ECU Node Rx (New)"], "VCU")
-        self.assertEqual(diff["ECU Node Tx (Old)"], "BCM")
+        self.assertIn(diff["ECU Node Rx"], ("ECM->VCU", "ECM, IC->VCU"))
+        self.assertEqual(diff["ECU Node Tx"], "BCM->Gateway")
 
     def test_unchanged_signals_under_renamed_message_keep_both_parent_ids(self):
         new = _database(replace(self.message, name="StatusV2", can_id=400))
@@ -123,24 +122,24 @@ class ImpactReportTests(unittest.TestCase):
         self.assertEqual(len(result.signal_changes), 2)
         signal = _rows(self._report(result)["Signal Details"])[0]
         self.assertEqual(signal["Change Type"], "Unchanged")
-        self.assertEqual(signal["Parent Message (Old)"], "Status")
-        self.assertEqual(signal["Parent Message (New)"], "StatusV2")
-        self.assertEqual(signal["CAN ID (Old)"], "0x64")
-        self.assertEqual(signal["CAN ID (New)"], "0x190")
+        self.assertEqual(signal["Parent Message"], "Status->StatusV2")
+        self.assertEqual(signal["CAN ID"], "0x64->0x190")
+        message = _rows(self._report(result)["Message Details"])[0]
+        self.assertEqual(message["Message Name"], "Status->StatusV2")
+        self.assertEqual(message["CAN ID"], "0x64->0x190")
 
     def test_added_removed_entities_keep_only_available_routing_context(self):
-        for old, new, kind, side, missing in (
-            (_database(), _database(self.message), "Added", "New", "Old"),
-            (_database(self.message), _database(), "Removed", "Old", "New"),
+        for old, new, kind, tx, can_id in (
+            (_database(), _database(self.message), "Added", "->BCM", "->0x64"),
+            (_database(self.message), _database(), "Removed", "BCM->", "0x64->"),
         ):
             with self.subTest(kind=kind):
                 workbook = self._report(self._compare(old, new))
                 for sheet in ("Message Details", "Signal Details"):
                     row = _rows(workbook[sheet])[0]
                     self.assertEqual(row["Change Type"], kind)
-                    self.assertEqual(row[f"ECU Node Tx ({side})"], "BCM")
-                    self.assertIsNone(row[f"ECU Node Tx ({missing})"])
-                    self.assertIsNone(row[f"CAN ID ({missing})"])
+                    self.assertEqual(row["ECU Node Tx"], tx)
+                    self.assertEqual(row["CAN ID"], can_id)
 
     def test_signal_added_removed_inside_matched_parent(self):
         # Keep the replacement structurally unrelated to test actual add/remove routing.
@@ -150,14 +149,13 @@ class ImpactReportTests(unittest.TestCase):
         rows = _rows(self._report(result)["Signal Details"])
         removed = next(row for row in rows if row["Change Type"] == "Removed")
         added = next(row for row in rows if row["Change Type"] == "Added")
-        self.assertEqual(removed["Old Signal Name"], "State")
-        self.assertIsNone(removed["New Signal Name"])
-        self.assertEqual(added["New Signal Name"], "Temperature")
-        self.assertIsNone(added["Old Signal Name"])
-        self.assertEqual(removed["ECU Node Rx (Old)"], "ECM")
-        self.assertIsNone(removed["ECU Node Rx (New)"])
-        self.assertEqual(added["ECU Node Rx (New)"], "ECM")
-        self.assertIsNone(added["ECU Node Rx (Old)"])
+        self.assertEqual(removed["Signal Name"], "State->")
+        self.assertEqual(added["Signal Name"], "->Temperature")
+        self.assertEqual(removed["ECU Node Rx"], "ECM->")
+        self.assertEqual(added["ECU Node Rx"], "->ECM")
+        for row in (removed, added):
+            self.assertEqual(row["Parent Message"], "Status")
+            self.assertEqual(row["ECU Node Tx"], "BCM")
 
     def test_automatic_rename_keeps_ecu_context_and_full_mode(self):
         renamed = replace(self.message.signals["Speed"], name="VehicleSpeed")
@@ -166,8 +164,8 @@ class ImpactReportTests(unittest.TestCase):
         self.assertTrue(result.include_unchanged)
         rows = _rows(self._report(result)["Signal Details"])
         renamed_row = next(row for row in rows if row["Change Type"] == "Renamed")
-        self.assertEqual(renamed_row["ECU Node Rx (Old)"], "ECM, IC")
-        self.assertEqual(renamed_row["ECU Node Rx (New)"], "ECM, IC")
+        self.assertEqual(renamed_row["Signal Name"], "Speed->VehicleSpeed")
+        self.assertEqual(renamed_row["ECU Node Rx"], "ECM, IC")
         self.assertEqual(result.summary()["Total Changes"], 1)
 
     def test_extended_and_standard_twins_are_both_in_inventory(self):
@@ -176,7 +174,7 @@ class ImpactReportTests(unittest.TestCase):
         self.assertEqual(len(result.message_changes), 2)
         self.assertEqual(len(result.signal_changes), 4)
         rows = _rows(self._report(result)["Message Details"])
-        self.assertEqual({row["New Message Name"] for row in rows}, {"Status", "ExtendedStatus"})
+        self.assertEqual({row["Message Name"] for row in rows}, {"Status", "ExtendedStatus"})
 
     def test_changed_value_table_multiplexing_and_comments_export_only_in_changed_properties(self):
         speed = replace(self.message.signals["Speed"], is_multiplexer=True,
@@ -185,13 +183,13 @@ class ImpactReportTests(unittest.TestCase):
         message = replace(self.message, signals={"Speed": speed, "State": state})
         workbook = self._report(self._compare(new=_database(message)))
         rows = _rows(workbook["Changed Properties"])
-        values = {(row["New Name"], row["Property"]): (row["Old Value"], row["New Value"]) for row in rows}
+        values = {(row["Name"], row["Property"]): row["Value"] for row in rows}
         self.assertEqual(values, {
-            ("Speed", "Multiplexer"): ("No", "Yes"),
-            ("Speed", "Value Descriptions"): ("blank", "0=Off, 1=On"),
-            ("Speed", "Description"): (None, "Speed state"),
-            ("State", "Multiplexer IDs"): ("blank", "0, 1"),
-            ("State", "Multiplexer Signal"): ("blank", "Speed"),
+            ("Speed", "Multiplexer"): "No->Yes",
+            ("Speed", "Value Descriptions"): "blank->0=Off, 1=On",
+            ("Speed", "Description"): "->Speed state",
+            ("State", "Multiplexer IDs"): "blank->0, 1",
+            ("State", "Multiplexer Signal"): "blank->Speed",
         })
         for row in _rows(workbook["Signal Details"]):
             self.assertNotIn("Multiplexer (New)", row)
@@ -202,10 +200,10 @@ class ImpactReportTests(unittest.TestCase):
         new = replace(self.message, dlc=16, cycle_time_ms=20, comment="Updated status")
         workbook = self._report(self._compare(new=_database(new)))
         rows = _rows(workbook["Changed Properties"])
-        self.assertEqual({row["Property"]: (row["Old Value"], row["New Value"]) for row in rows}, {
-            "DLC": ("8", "16"),
-            "Cycle Time": ("10", "20"),
-            "Description": ("Vehicle status", "Updated status"),
+        self.assertEqual({row["Property"]: row["Value"] for row in rows}, {
+            "DLC": "8->16",
+            "Cycle Time": "10->20",
+            "Description": "Vehicle status->Updated status",
         })
         self.assertTrue(all(row["Entity Type"] == "Message" for row in rows))
 
@@ -214,8 +212,8 @@ class ImpactReportTests(unittest.TestCase):
         result.ecu_map = {"ECM": "Powertrain", "BCM": "BodyController"}
         workbook = self._report(result)
         rows = list(workbook["Summary"].iter_rows(values_only=True))
-        header = rows.index(("ECU Node (Old)", "ECU Node (New)"))
-        self.assertEqual(rows[header + 1:], [("BCM", "BodyController"), ("ECM", "Powertrain")])
+        header = rows.index(("ECU Node", None))
+        self.assertEqual(rows[header + 1:], [("BCM->BodyController", None), ("ECM->Powertrain", None)])
 
     def test_automatic_renamed_file_and_manual_pairing_preserve_full_inventory(self):
         old, new = self.root / "old", self.root / "new"

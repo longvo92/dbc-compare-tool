@@ -61,6 +61,8 @@ The workbook contains `Summary`, `DBC Overview`, `Message Details`, `Signal Deta
 
 Detail sheets contain identity, CAN IDs, ECU Tx/Rx and match confidence/reasons. Property deltas appear in Changed Properties. Summary records report mode, ECU mappings and skipped parse errors. DBC Overview retains file paths; detail display labels use basenames.
 
+The writer combines OLD/NEW fields in one column: equal values appear once; changes use `old->new` with an empty side for missing values. This includes filenames, paths, inventory counts, entity names, parent messages, CAN IDs, ECU routing and property values. Comparison results retain separate OLD/NEW data.
+
 ## GUI and Entry Points
 
 Comparison, ECU discovery and export use workers. Input changes invalidate saved DBC and ECU pairing. Input type and paths are stored through `QSettings("DbcCompareTool", "DBCCompareTool")`.

@@ -85,13 +85,17 @@ class TestShiftedSignalPairing(unittest.TestCase):
                 try:
                     values = list(workbook["Signal Details"].values)
                     rows = [dict(zip(values[0], row)) for row in values[1:]]
-                    self.assertEqual({row["Old Signal Name"]: row["New Signal Name"] for row in rows}, pairs)
+                    self.assertEqual({row["Signal Name"] for row in rows},
+                                     {f"{old}->{new}" for old, new in pairs.items()})
                     self.assertTrue(all(row["Change Type"] == "Renamed" for row in rows))
                     self.assertTrue(all(row["Confidence Level"] == ("Low" if event_like else "Medium") for row in rows))
                     self.assertTrue(all(0.0 <= float(row["Confidence Score"]) < 0.90 for row in rows))
                     self.assertTrue(all("review recommended" in row["Match Reason"] for row in rows))
                     deltas = list(workbook["Changed Properties"].values)[1:]
                     self.assertEqual(len(deltas), len(pairs))
-                    self.assertTrue(all(row[6] == "Start Bit" and int(row[8]) - int(row[7]) == 1 for row in deltas))
+                    for row in deltas:
+                        self.assertEqual(row[5], "Start Bit")
+                        old, new = row[6].split("->")
+                        self.assertEqual(int(new) - int(old), 1)
                 finally:
                     workbook.close()
