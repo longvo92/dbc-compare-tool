@@ -13,6 +13,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from dbc_compare_tool.core.comparator import DbcComparator
+from dbc_compare_tool.core.models import ComparisonResult, FilePairSummary
 from dbc_compare_tool.report.excel import default_report_path, write_excel_report
 
 _EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
@@ -53,9 +54,9 @@ class BaselineReportTests(unittest.TestCase):
     def test_every_signal_change_reaches_the_signal_sheet(self):
         rows = _rows(self.workbook["Signal Details"])
         self.assertEqual(len(rows), len(self.result.signal_changes))
-        renamed = {row["Signal Name"]
+        renamed = {(row["Old Signal Name"], row["New Signal Name"])
                    for row in rows if row["Change Type"] == "Renamed"}
-        self.assertIn("VehicleSpeed->VehSpd", renamed)
+        self.assertIn(("VehicleSpeed", "VehSpd"), renamed)
 
     def test_can_id_is_written_in_hexadecimal(self):
         rows = _rows(self.workbook["Message Details"])
@@ -73,8 +74,10 @@ class BaselineReportTests(unittest.TestCase):
         context = {"CAN ID", "ECU Node Tx", "ECU Node Rx"}
         shared = {"DBC File", "Change Type", "Confidence Score", "Confidence Level", "Match Reason"} | context
         expected = {
-            "Message Details": shared | {"Message Name"},
-            "Signal Details": shared | {"Signal Name", "Parent Message"},
+            "Message Details": shared | {"Old Message Name", "New Message Name"},
+            "Signal Details": shared | {
+                "Old Signal Name", "New Signal Name", "Parent Message (Old)", "Parent Message (New)",
+            },
         }
         for name, headers in expected.items():
             with self.subTest(sheet=name):
@@ -128,6 +131,28 @@ class BaselineReportTests(unittest.TestCase):
         nested = Path(self._tmp.name) / "a" / "b" / "report.xlsx"
         write_excel_report(self.result, nested)
         self.assertTrue(nested.is_file())
+
+
+class OneSidedReportTests(unittest.TestCase):
+    def test_added_removed_dbc_paths_and_counts_have_no_arrows_and_keep_zero(self):
+        result = ComparisonResult(file_pairs=[
+            FilePairSummary("added.dbc", "DBC Added", "", "new/added.dbc", None, 0, 2, 0, 0),
+            FilePairSummary("removed.dbc", "DBC Removed", "old/removed.dbc", "", None, 1, 0, 0, 0),
+            FilePairSummary("matched.dbc", "Matched", "same.dbc", "same.dbc", 1.0, 0, 1, 1, 0),
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "report.xlsx"
+            write_excel_report(result, output)
+            workbook = load_workbook(output)
+            try:
+                added, removed, matched = _rows(workbook["DBC Overview"])
+                self.assertEqual((added["Path"], added["Messages"], added["Signals"]), ("new/added.dbc", 2, 0))
+                self.assertEqual((removed["Path"], removed["Messages"], removed["Signals"]), ("old/removed.dbc", 1, 0))
+                for row in (added, removed):
+                    self.assertTrue(all("->" not in str(value) for value in row.values()))
+                self.assertEqual((matched["Messages"], matched["Signals"]), ("0->1", "1->0"))
+            finally:
+                workbook.close()
 
 
 class DefaultReportPathTests(unittest.TestCase):

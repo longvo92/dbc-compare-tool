@@ -83,7 +83,8 @@ class TestBulkRename(unittest.TestCase):
             self.assertTrue(all(row[0] == "VCAN_v1.dbc->VCAN_v2.dbc" for row in rows[1:]))
         signals = list(workbook["Signal Details"].values)
         self.assertEqual(len(signals) - 1, len(SUFFIXES))
-        self.assertTrue(all(row[2] == "Renamed" for row in signals[1:]))
+        change_column = signals[0].index("Change Type")
+        self.assertTrue(all(row[change_column] == "Renamed" for row in signals[1:]))
         self.assertEqual(workbook["Changed Properties"].max_row, 1)
 
     def test_real_property_change_remains_visible_after_bulk_rename(self):
