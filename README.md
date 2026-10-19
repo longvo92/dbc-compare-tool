@@ -44,6 +44,7 @@ See the [User Guide](resources/help/user_guide.md) for pairing, CLI and Excel ba
 | Changed Properties | Compare OLD and NEW property values |
 
 Use Excel column filters to find a change type, CAN ID or ECU.
+OLD/NEW information shares one column: `EVCC` when unchanged, `EVCC->EVCC2` when changed. A missing side stays empty (`->EVCC` or `EVCC->`).
 
 ## Requirements
 

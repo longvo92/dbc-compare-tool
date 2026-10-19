@@ -53,35 +53,34 @@ class BaselineReportTests(unittest.TestCase):
     def test_every_signal_change_reaches_the_signal_sheet(self):
         rows = _rows(self.workbook["Signal Details"])
         self.assertEqual(len(rows), len(self.result.signal_changes))
-        renamed = {(row["Old Signal Name"], row["New Signal Name"])
+        renamed = {row["Signal Name"]
                    for row in rows if row["Change Type"] == "Renamed"}
-        self.assertIn(("VehicleSpeed", "VehSpd"), renamed)
+        self.assertIn("VehicleSpeed->VehSpd", renamed)
 
     def test_can_id_is_written_in_hexadecimal(self):
         rows = _rows(self.workbook["Message Details"])
         self.assertTrue(rows)
         self.assertTrue(all(str(row["CAN ID"]).startswith("0x") for row in rows if row["CAN ID"]))
 
-    def test_changed_properties_carries_old_and_new_values(self):
+    def test_changed_properties_combines_old_and_new_values(self):
         rows = _rows(self.workbook["Changed Properties"])
         self.assertTrue(rows)
         factor_rows = [row for row in rows if row["Property"] == "Factor"]
         self.assertTrue(factor_rows, "the EngineRPM factor change should appear")
-        self.assertNotEqual(factor_rows[0]["Old Value"], factor_rows[0]["New Value"])
+        self.assertEqual(factor_rows[0]["Value"], "0.25->0.5")
 
     def test_detail_columns_contain_only_identity_pairing_and_routing(self):
-        context = {f"{label} ({side})" for label in ("CAN ID", "ECU Node Tx", "ECU Node Rx")
-                   for side in ("Old", "New")}
+        context = {"CAN ID", "ECU Node Tx", "ECU Node Rx"}
         shared = {"DBC File", "Change Type", "Confidence Score", "Confidence Level", "Match Reason"} | context
         expected = {
-            "Message Details": shared | {"Old Message Name", "New Message Name", "CAN ID"},
-            "Signal Details": shared | {"Old Signal Name", "New Signal Name", "Parent Message",
-                                         "Parent Message (Old)", "Parent Message (New)"},
+            "Message Details": shared | {"Message Name"},
+            "Signal Details": shared | {"Signal Name", "Parent Message"},
         }
         for name, headers in expected.items():
             with self.subTest(sheet=name):
                 sheet = self.workbook[name]
                 self.assertEqual(set(next(sheet.iter_rows(values_only=True))), headers)
+                self.assertEqual(sheet.max_column, len(headers))
                 self.assertEqual(sheet.auto_filter.ref, sheet.dimensions)
 
     def test_rename_evidence_does_not_repeat_changed_property_values(self):
@@ -98,6 +97,32 @@ class BaselineReportTests(unittest.TestCase):
         rows = _rows(self.workbook["DBC Overview"])
         self.assertEqual(len(rows), len(self.result.file_pairs))
         self.assertEqual(rows[0]["Status"], "Matched")
+
+    def test_overview_combines_paths_and_counts_without_losing_zero(self):
+        rows = _rows(self.workbook["DBC Overview"])
+        for row, pair in zip(rows, self.result.file_pairs):
+            with self.subTest(file=pair.dbc_file):
+                self.assertEqual(row["Path"], pair.old_path if pair.old_path == pair.new_path
+                                 else f"{pair.old_path}->{pair.new_path}")
+                for label, old, new in (
+                    ("Messages", pair.message_count_old, pair.message_count_new),
+                    ("Signals", pair.signal_count_old, pair.signal_count_new),
+                ):
+                    self.assertEqual(row[label], old if old == new else f"{old}->{new}")
+
+    def test_confidence_and_change_colors_follow_compacted_columns(self):
+        for name in ("Message Details", "Signal Details"):
+            sheet = self.workbook[name]
+            headers = [cell.value for cell in sheet[1]]
+            for row in sheet.iter_rows(min_row=2):
+                if row[headers.index("Confidence Level")].value == "High":
+                    self.assertEqual(row[headers.index("Confidence Level")].fill.fgColor.rgb, "00C6EFCE")
+                    self.assertEqual(row[headers.index("Confidence Score")].alignment.horizontal, "center")
+        sheet = self.workbook["Changed Properties"]
+        headers = [cell.value for cell in sheet[1]]
+        for row in sheet.iter_rows(min_row=2):
+            if row[headers.index("Change Type")].value == "Modified":
+                self.assertEqual(row[headers.index("Value")].fill.fgColor.rgb, "00FFF2CC")
 
     def test_missing_parent_directory_is_created(self):
         nested = Path(self._tmp.name) / "a" / "b" / "report.xlsx"

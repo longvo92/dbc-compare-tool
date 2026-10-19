@@ -18,5 +18,6 @@ For folders, pass two folder paths. Add `--include-unchanged` for all entries. R
 
 - Start with **Summary** for totals and **DBC Overview** to check file pairs and parse errors.
 - Filter **Message Details** and **Signal Details** by change type, CAN ID or ECU. Review **Medium/Low** confidence and **Match Reason**.
-- Open **Changed Properties** to review each changed property's OLD and NEW values.
+- OLD/NEW information shares one column: unchanged values appear once (`EVCC`), and changes use `old->new` (`EVCC->EVCC2`). A missing side stays empty (`->EVCC` for added values, `EVCC->` for removed values).
+- Open **Changed Properties** to review each changed property's `old->new` value in **Value**.
 - For cells listing multiple ECUs, use **Text Filters → Contains**. Close the workbook before regenerating the same report.

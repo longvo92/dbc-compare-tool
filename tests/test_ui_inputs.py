@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from openpyxl import load_workbook
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
@@ -241,7 +243,6 @@ class GuiInputTests(unittest.TestCase):
                     )
 
     def test_bulk_rename_exports_correct_rows_through_gui(self):
-        from openpyxl import load_workbook
         from tests.test_bulk_rename import NEW_DBC, OLD_DBC, SUFFIXES
 
         self.old.write_text(OLD_DBC, encoding="utf-8")
@@ -257,12 +258,10 @@ class GuiInputTests(unittest.TestCase):
         self.addCleanup(workbook.close)
         rows = list(workbook["Signal Details"].values)[1:]
         self.assertEqual(len(rows), len(SUFFIXES))
-        self.assertTrue(all(row[0] == "old.dbc -> new.dbc" and row[2] == "Renamed" for row in rows))
+        self.assertTrue(all(row[0] == "old.dbc->new.dbc" and row[2] == "Renamed" for row in rows))
         self.assertEqual(workbook["Changed Properties"].max_row, 1)
 
     def test_shifted_signal_pairing_confidence_is_exported_by_gui(self):
-        from openpyxl import load_workbook
-
         from tests.test_signal_pairing import shifted_dbc
 
         old_folder, new_folder = self.root / "old", self.root / "new"
@@ -292,9 +291,10 @@ class GuiInputTests(unittest.TestCase):
                     workbook = load_workbook(report)
                     try:
                         rows = list(workbook["Signal Details"].values)[1:]
-                        self.assertEqual({row[3]: row[4] for row in rows}, pairs)
+                        self.assertEqual({row[3] for row in rows},
+                                         {f"{old}->{new}" for old, new in pairs.items()})
                         self.assertTrue(all(row[2] == "Renamed" for row in rows))
-                        self.assertTrue(all(row[6] == ("Low" if event_like else "Medium") for row in rows))
+                        self.assertTrue(all(row[5] == ("Low" if event_like else "Medium") for row in rows))
                         self.assertEqual(workbook["Changed Properties"].max_row - 1, len(pairs))
                     finally:
                         workbook.close()
@@ -425,6 +425,18 @@ class GuiInputTests(unittest.TestCase):
         self.assertEqual(self.window.last_report, report)
         self.assertTrue(report.is_file())
         self.assertIn("0 changes", self.window.run_status.text())
+        with report.open("rb") as stream:
+            workbook = load_workbook(stream)
+            try:
+                for name in ("Message Details", "Signal Details"):
+                    values = list(workbook[name].values)
+                    row = dict(zip(values[0], values[1]))
+                    self.assertEqual(row["ECU Node Tx"], "OldNode->NewNode")
+                    self.assertEqual(row["ECU Node Rx"], "Receiver")
+                    self.assertEqual(row["CAN ID"], "0x64")
+                    self.assertEqual(row["Change Type"], "Unchanged")
+            finally:
+                workbook.close()
 
     def test_ecu_dialog_supports_swaps_and_clearing_saved_mapping(self):
         dialog = EcuPairingDialog(
