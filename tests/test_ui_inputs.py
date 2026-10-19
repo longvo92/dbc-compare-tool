@@ -176,6 +176,44 @@ class GuiInputTests(unittest.TestCase):
         self.assertFalse(self.window.manual_pair_button.isEnabled())
         self.assertTrue(self.window.progress.isHidden())
 
+    def test_gui_export_splits_names_and_omits_added_removed_arrows(self):
+        old_folder, new_folder = self.root / "old", self.root / "new"
+        old_folder.mkdir()
+        new_folder.mkdir()
+        old_dbc = _DBC.format(sender="Controller") + ' SG_ Removed : 8|8@1+ (1,0) [0|255] "" Receiver\n'
+        new_dbc = _DBC.format(sender="Controller").replace("Status:", "StatusNew:").replace("Counter :", "CounterNew :")
+        new_dbc += ' SG_ Added : 32|32@0- (0.01,-100) [-100|100] "degC" Spare\n'
+        (old_folder / "bus.dbc").write_text(old_dbc, encoding="utf-8")
+        (new_folder / "bus.dbc").write_text(new_dbc, encoding="utf-8")
+        self.window.old_input.setText(str(old_folder))
+        self.window.new_input.setText(str(new_folder))
+        report = self.root / "hotfix.xlsx"
+        self.window.output_input.setText(str(report))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.window.run_button.click()
+            self._wait_until(lambda: self.window.run_button.isEnabled())
+        error.assert_not_called()
+        self.assertEqual(self.window.last_report, report)
+        workbook = load_workbook(report)
+        self.addCleanup(workbook.close)
+        kinds = set()
+        for sheet_name, entity in (("Message Details", "Message"), ("Signal Details", "Signal")):
+            sheet = workbook[sheet_name]
+            headers = next(sheet.iter_rows(values_only=True))
+            self.assertIn(f"Old {entity} Name", headers)
+            self.assertIn(f"New {entity} Name", headers)
+            for cells in sheet.iter_rows(min_row=2, values_only=True):
+                row = dict(zip(headers, cells))
+                kind = row["Change Type"]
+                kinds.add(kind)
+                if kind in {"Added", "Removed"}:
+                    self.assertTrue(all("->" not in str(value) for value in row.values()))
+                elif kind == "Renamed":
+                    self.assertTrue(row[f"Old {entity} Name"])
+                    self.assertTrue(row[f"New {entity} Name"])
+                    self.assertNotEqual(row[f"Old {entity} Name"], row[f"New {entity} Name"])
+        self.assertTrue({"Added", "Removed", "Renamed"}.issubset(kinds))
+
     def test_ecu_discovery_runs_in_worker_and_saves_selected_mapping(self):
         self._files()
         with patch(f"{_UI}.EcuPairingDialog") as dialog_type:
@@ -256,9 +294,10 @@ class GuiInputTests(unittest.TestCase):
         error.assert_not_called()
         workbook = load_workbook(report)
         self.addCleanup(workbook.close)
-        rows = list(workbook["Signal Details"].values)[1:]
+        values = list(workbook["Signal Details"].values)
+        rows = [dict(zip(values[0], row)) for row in values[1:]]
         self.assertEqual(len(rows), len(SUFFIXES))
-        self.assertTrue(all(row[0] == "old.dbc->new.dbc" and row[2] == "Renamed" for row in rows))
+        self.assertTrue(all(row["DBC File"] == "old.dbc->new.dbc" and row["Change Type"] == "Renamed" for row in rows))
         self.assertEqual(workbook["Changed Properties"].max_row, 1)
 
     def test_shifted_signal_pairing_confidence_is_exported_by_gui(self):
@@ -290,11 +329,12 @@ class GuiInputTests(unittest.TestCase):
                     self.window.export_worker.wait(5000)
                     workbook = load_workbook(report)
                     try:
-                        rows = list(workbook["Signal Details"].values)[1:]
-                        self.assertEqual({row[3] for row in rows},
-                                         {f"{old}->{new}" for old, new in pairs.items()})
-                        self.assertTrue(all(row[2] == "Renamed" for row in rows))
-                        self.assertTrue(all(row[5] == ("Low" if event_like else "Medium") for row in rows))
+                        values = list(workbook["Signal Details"].values)
+                        rows = [dict(zip(values[0], row)) for row in values[1:]]
+                        self.assertEqual({(row["Old Signal Name"], row["New Signal Name"]) for row in rows},
+                                         set(pairs.items()))
+                        self.assertTrue(all(row["Change Type"] == "Renamed" for row in rows))
+                        self.assertTrue(all(row["Confidence Level"] == ("Low" if event_like else "Medium") for row in rows))
                         self.assertEqual(workbook["Changed Properties"].max_row - 1, len(pairs))
                     finally:
                         workbook.close()

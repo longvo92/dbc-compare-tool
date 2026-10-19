@@ -94,8 +94,8 @@ def write_excel_report(result: ComparisonResult, output_path: Path) -> Path:
 
     _format_summary(summary_sheet)
     _format_overview_sheet(overview_sheet)
-    _format_detail_sheet(message_sheet, change_col=2, conf_score_col=5, conf_level_col=6)
-    _format_detail_sheet(signal_sheet, change_col=3, conf_score_col=5, conf_level_col=6)
+    _format_detail_sheet(message_sheet, change_col=2, conf_score_col=6, conf_level_col=7)
+    _format_detail_sheet(signal_sheet, change_col=4, conf_score_col=7, conf_level_col=8)
     _format_property_diff_sheet(diff_sheet)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -141,10 +141,10 @@ def _write_overview(sheet, file_pairs: list[FilePairSummary]) -> None:
         sheet.append([
             _dbc_label(fp.dbc_file),
             fp.status,
-            _fmt_transition(fp.old_path, fp.new_path),
+            _fmt_transition(fp.old_path, fp.new_path, change_type=fp.status),
             _fmt_confidence(fp.pairing_confidence),
-            _fmt_transition(fp.message_count_old, fp.message_count_new),
-            _fmt_transition(fp.signal_count_old, fp.signal_count_new),
+            _fmt_transition(fp.message_count_old, fp.message_count_new, change_type=fp.status),
+            _fmt_transition(fp.signal_count_old, fp.signal_count_new, change_type=fp.status),
             "; ".join(fp.pairing_reasons),
         ])
 
@@ -153,7 +153,8 @@ def _write_message_details(sheet, changes: list[Change]) -> None:
     sheet.append([
         "DBC File",
         "Change Type",
-        "Message Name",
+        "Old Message Name",
+        "New Message Name",
         "CAN ID",
         "Confidence Score",
         "Confidence Level",
@@ -165,7 +166,8 @@ def _write_message_details(sheet, changes: list[Change]) -> None:
         sheet.append([
             _dbc_label(change.dbc_file),
             change.change_type,
-            _fmt_transition(change.old_name, change.new_name),
+            change.old_name,
+            change.new_name,
             can_id or _fmt_can_id(change.can_id),
             _fmt_confidence(change.confidence),
             change.confidence_level,
@@ -178,9 +180,11 @@ def _write_message_details(sheet, changes: list[Change]) -> None:
 def _write_signal_details(sheet, changes: list[Change]) -> None:
     sheet.append([
         "DBC File",
-        "Parent Message",
+        "Parent Message (Old)",
+        "Parent Message (New)",
         "Change Type",
-        "Signal Name",
+        "Old Signal Name",
+        "New Signal Name",
         "Confidence Score",
         "Confidence Level",
         "Match Reason",
@@ -189,9 +193,10 @@ def _write_signal_details(sheet, changes: list[Change]) -> None:
     for change in changes:
         sheet.append([
             _dbc_label(change.dbc_file),
-            _parent_message(change),
+            *_parent_message_names(change),
             change.change_type,
-            _fmt_transition(change.old_name, change.new_name),
+            change.old_name,
+            change.new_name,
             _fmt_confidence(change.confidence),
             change.confidence_level,
             _match_reason(change),
@@ -207,8 +212,10 @@ def _write_property_diff(
     sheet.append([
         "DBC File",
         "Entity Type",
-        "Name",
-        "Parent Message",
+        "Old Name",
+        "New Name",
+        "Parent Message (Old)",
+        "Parent Message (New)",
         "Change Type",
         "Property",
         "Value",
@@ -219,11 +226,13 @@ def _write_property_diff(
             sheet.append([
                 _dbc_label(change.dbc_file),
                 "Message",
-                _fmt_transition(change.old_name, change.new_name),
+                change.old_name,
+                change.new_name,
+                "",
                 "",
                 change.change_type,
                 prop,
-                _fmt_transition(old_val, new_val),
+                _fmt_transition(old_val, new_val, change_type=change.change_type),
                 *_context_values(change),
             ])
     for change in signal_changes:
@@ -231,11 +240,12 @@ def _write_property_diff(
             sheet.append([
                 _dbc_label(change.dbc_file),
                 "Signal",
-                _fmt_transition(change.old_name, change.new_name),
-                _parent_message(change),
+                change.old_name,
+                change.new_name,
+                *_parent_message_names(change),
                 change.change_type,
                 prop,
-                _fmt_transition(old_val, new_val),
+                _fmt_transition(old_val, new_val, change_type=change.change_type),
                 *_context_values(change, signal=True),
             ])
 
@@ -383,7 +393,7 @@ def _format_property_diff_sheet(sheet) -> None:
     sheet.auto_filter.ref = sheet.dimensions
 
     for row_idx, row in enumerate(sheet.iter_rows(min_row=2), start=2):
-        change_type = str(row[4].value or "")  # column 5 = Change Type
+        change_type = str(row[6].value or "")  # column 7 = Change Type
         row_fill = PatternFill("solid", fgColor=_CHANGE_ROW_FILL.get(change_type, "FFFFFF"))
 
         for cell in row:
@@ -404,10 +414,16 @@ def _format_property_diff_sheet(sheet) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _fmt_transition(old: str | int | None, new: str | int | None) -> str | int:
-    """Show equal values once; retain both sides of a change, including blanks."""
+def _fmt_transition(
+    old: str | int | None, new: str | int | None, *, change_type: str = "",
+) -> str | int:
+    """Show only the existing side for additions/removals; retain other deltas."""
     old = "" if old is None else old
     new = "" if new is None else new
+    if change_type in {"Added", "DBC Added"}:
+        return new
+    if change_type in {"Removed", "DBC Removed"}:
+        return old
     return old if old == new else f"{old}->{new}"
 
 
@@ -416,10 +432,13 @@ def _dbc_label(label: str) -> str:
     return _fmt_transition(old, new) if separator else label
 
 
-def _parent_message(change: Change) -> str:
+def _parent_message_names(change: Change) -> tuple[str, str]:
     if change.old_message is None and change.new_message is None:
-        return change.parent_message
-    return _fmt_transition(
+        return (
+            change.parent_message if change.change_type != "Added" else "",
+            change.parent_message if change.change_type != "Removed" else "",
+        )
+    return (
         change.old_message.name if change.old_message else "",
         change.new_message.name if change.new_message else "",
     )
@@ -450,9 +469,12 @@ def _context_values(change: Change, signal: bool = False) -> list[str]:
     else:
         old_rx, new_rx = _message_receivers(old), _message_receivers(new)
     return [
-        _fmt_transition(_fmt_can_id(old.can_id) if old else "", _fmt_can_id(new.can_id) if new else ""),
-        _fmt_transition(old.transmitter if old else "", new.transmitter if new else ""),
-        _fmt_transition(old_rx, new_rx),
+        _fmt_transition(
+            _fmt_can_id(old.can_id) if old else "", _fmt_can_id(new.can_id) if new else "",
+            change_type=change.change_type,
+        ),
+        _fmt_transition(old.transmitter if old else "", new.transmitter if new else "", change_type=change.change_type),
+        _fmt_transition(old_rx, new_rx, change_type=change.change_type),
     ]
 
 
