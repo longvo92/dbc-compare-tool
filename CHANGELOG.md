@@ -10,6 +10,8 @@ for the procedure.
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-19
+
 ### Changed
 
 - Combine OLD/NEW report columns for names, CAN IDs, ECU routing, paths, counts and property values. Show unchanged values once and changes as `old->new`, with an empty side for added or removed values.
