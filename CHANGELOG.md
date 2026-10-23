@@ -10,6 +10,10 @@ for the procedure.
 
 ## [Unreleased]
 
+### Changed
+
+- Move property deltas into one `Changed Properties` column in each message/signal detail sheet. Separate multiple changes with `; ` and remove the standalone Changed Properties sheet.
+
 ## [0.6.4] - 2026-10-19
 
 ### Fixed

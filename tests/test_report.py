@@ -39,10 +39,10 @@ class BaselineReportTests(unittest.TestCase):
         self.workbook = load_workbook(self.output)
         self.addCleanup(self.workbook.close)
 
-    def test_workbook_has_the_five_documented_sheets_in_order(self):
+    def test_workbook_has_the_four_documented_sheets_in_order(self):
         self.assertEqual(
             self.workbook.sheetnames,
-            ["Summary", "DBC Overview", "Message Details", "Signal Details", "Changed Properties"],
+            ["Summary", "DBC Overview", "Message Details", "Signal Details"],
         )
 
     def test_summary_total_matches_the_result(self):
@@ -64,15 +64,17 @@ class BaselineReportTests(unittest.TestCase):
         self.assertTrue(all(str(row["CAN ID"]).startswith("0x") for row in rows if row["CAN ID"]))
 
     def test_changed_properties_combines_old_and_new_values(self):
-        rows = _rows(self.workbook["Changed Properties"])
+        rows = _rows(self.workbook["Signal Details"])
         self.assertTrue(rows)
-        factor_rows = [row for row in rows if row["Property"] == "Factor"]
+        factor_rows = [row for row in rows if row["New Signal Name"] == "EngineRPM"]
         self.assertTrue(factor_rows, "the EngineRPM factor change should appear")
-        self.assertEqual(factor_rows[0]["Value"], "0.25->0.5")
+        self.assertIn("Factor: 0.25->0.5", factor_rows[0]["Changed Properties"])
 
-    def test_detail_columns_contain_only_identity_pairing_and_routing(self):
+    def test_detail_columns_include_one_changed_properties_column(self):
         context = {"CAN ID", "ECU Node Tx", "ECU Node Rx"}
-        shared = {"DBC File", "Change Type", "Confidence Score", "Confidence Level", "Match Reason"} | context
+        shared = {
+            "DBC File", "Change Type", "Confidence Score", "Confidence Level", "Match Reason", "Changed Properties",
+        } | context
         expected = {
             "Message Details": shared | {"Old Message Name", "New Message Name"},
             "Signal Details": shared | {
@@ -121,11 +123,11 @@ class BaselineReportTests(unittest.TestCase):
                 if row[headers.index("Confidence Level")].value == "High":
                     self.assertEqual(row[headers.index("Confidence Level")].fill.fgColor.rgb, "00C6EFCE")
                     self.assertEqual(row[headers.index("Confidence Score")].alignment.horizontal, "center")
-        sheet = self.workbook["Changed Properties"]
-        headers = [cell.value for cell in sheet[1]]
-        for row in sheet.iter_rows(min_row=2):
-            if row[headers.index("Change Type")].value == "Modified":
-                self.assertEqual(row[headers.index("Value")].fill.fgColor.rgb, "00FFF2CC")
+                properties = row[headers.index("Changed Properties")]
+                self.assertTrue(properties.alignment.wrap_text)
+                self.assertIsNone(sheet.row_dimensions[properties.row].height)
+                if row[headers.index("Change Type")].value == "Modified":
+                    self.assertEqual(properties.fill.fgColor.rgb, "00FFF2CC")
 
     def test_missing_parent_directory_is_created(self):
         nested = Path(self._tmp.name) / "a" / "b" / "report.xlsx"

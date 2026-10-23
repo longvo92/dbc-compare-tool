@@ -85,7 +85,9 @@ class TestBulkRename(unittest.TestCase):
         self.assertEqual(len(signals) - 1, len(SUFFIXES))
         change_column = signals[0].index("Change Type")
         self.assertTrue(all(row[change_column] == "Renamed" for row in signals[1:]))
-        self.assertEqual(workbook["Changed Properties"].max_row, 1)
+        self.assertNotIn("Changed Properties", workbook.sheetnames)
+        properties_column = signals[0].index("Changed Properties")
+        self.assertTrue(all(row[properties_column] is None for row in signals[1:]))
 
     def test_real_property_change_remains_visible_after_bulk_rename(self):
         self.new.write_text(NEW_DBC.replace('[0|65535]', '[0|60000]', 1), encoding="utf-8")
@@ -96,7 +98,11 @@ class TestBulkRename(unittest.TestCase):
         report = write_excel_report(result, self.root / "changed.xlsx")
         workbook = load_workbook(report)
         self.addCleanup(workbook.close)
-        self.assertEqual(workbook["Changed Properties"].cell(2, 1).value, "VCAN_v1.dbc->VCAN_v2.dbc")
+        values = list(workbook["Signal Details"].values)
+        rows = [dict(zip(values[0], row)) for row in values[1:]]
+        row = next(row for row in rows if row["New Signal Name"] == "IVC_TotalMsgSize")
+        self.assertEqual(row["DBC File"], "VCAN_v1.dbc->VCAN_v2.dbc")
+        self.assertEqual(row["Changed Properties"], "Max: 65535->60000")
 
     def test_same_filename_still_shows_old_and_new_without_folders(self):
         target = self.new_root / "nested" / self.old.name

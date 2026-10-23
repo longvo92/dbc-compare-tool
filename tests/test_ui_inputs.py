@@ -298,7 +298,34 @@ class GuiInputTests(unittest.TestCase):
         rows = [dict(zip(values[0], row)) for row in values[1:]]
         self.assertEqual(len(rows), len(SUFFIXES))
         self.assertTrue(all(row["DBC File"] == "old.dbc->new.dbc" and row["Change Type"] == "Renamed" for row in rows))
-        self.assertEqual(workbook["Changed Properties"].max_row, 1)
+        self.assertNotIn("Changed Properties", workbook.sheetnames)
+        self.assertTrue(all(row["Changed Properties"] is None for row in rows))
+
+    def test_gui_exports_multiple_property_changes_in_each_detail_sheet(self):
+        self._files()
+        old = _DBC.format(sender="OldNode")
+        self.old.write_text(old, encoding="utf-8")
+        self.new.write_text(old.replace('0|8@1+ (1,0)', '1|8@1+ (2,0)')
+                            + '\nCM_ BO_ 100 "Updated status";\n', encoding="utf-8")
+        report = self.root / "properties.xlsx"
+        self.window.output_input.setText(str(report))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.window._run_compare()
+            self._wait_until(lambda: self.window.run_button.isEnabled())
+        error.assert_not_called()
+        self.window.worker.wait(5000)
+        self.window.export_worker.wait(5000)
+        workbook = load_workbook(report)
+        self.addCleanup(workbook.close)
+        self.assertEqual(workbook.sheetnames, ["Summary", "DBC Overview", "Message Details", "Signal Details"])
+        for name, expected in (
+            ("Message Details", "Description: ->Updated status"),
+            ("Signal Details", "Start Bit: 0->1; Factor: 1->2"),
+        ):
+            values = list(workbook[name].values)
+            self.assertEqual(len(values), 2)
+            row = dict(zip(values[0], values[1]))
+            self.assertEqual(row["Changed Properties"], expected)
 
     def test_shifted_signal_pairing_confidence_is_exported_by_gui(self):
         from tests.test_signal_pairing import shifted_dbc
@@ -335,7 +362,12 @@ class GuiInputTests(unittest.TestCase):
                                          set(pairs.items()))
                         self.assertTrue(all(row["Change Type"] == "Renamed" for row in rows))
                         self.assertTrue(all(row["Confidence Level"] == ("Low" if event_like else "Medium") for row in rows))
-                        self.assertEqual(workbook["Changed Properties"].max_row - 1, len(pairs))
+                        self.assertNotIn("Changed Properties", workbook.sheetnames)
+                        for row in rows:
+                            prop, value = row["Changed Properties"].split(": ")
+                            self.assertEqual(prop, "Start Bit")
+                            old_start, new_start = value.split("->")
+                            self.assertEqual(int(new_start) - int(old_start), 1)
                     finally:
                         workbook.close()
 

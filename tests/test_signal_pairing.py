@@ -91,12 +91,11 @@ class TestShiftedSignalPairing(unittest.TestCase):
                     self.assertTrue(all(row["Confidence Level"] == ("Low" if event_like else "Medium") for row in rows))
                     self.assertTrue(all(0.0 <= float(row["Confidence Score"]) < 0.90 for row in rows))
                     self.assertTrue(all("review recommended" in row["Match Reason"] for row in rows))
-                    values = list(workbook["Changed Properties"].values)
-                    deltas = [dict(zip(values[0], row)) for row in values[1:]]
-                    self.assertEqual(len(deltas), len(pairs))
-                    for row in deltas:
-                        self.assertEqual(row["Property"], "Start Bit")
-                        old, new = row["Value"].split("->")
+                    self.assertNotIn("Changed Properties", workbook.sheetnames)
+                    for row in rows:
+                        prop, value = row["Changed Properties"].split(": ")
+                        self.assertEqual(prop, "Start Bit")
+                        old, new = value.split("->")
                         self.assertEqual(int(new) - int(old), 1)
                 finally:
                     workbook.close()

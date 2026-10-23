@@ -76,7 +76,9 @@ class TestFileInputs(unittest.TestCase):
         self.assertTrue(report.is_file())
         workbook = load_workbook(report)
         self.addCleanup(workbook.close)
-        self.assertIn("Changed Properties", workbook.sheetnames)
+        self.assertNotIn("Changed Properties", workbook.sheetnames)
+        for name in ("Message Details", "Signal Details"):
+            self.assertIn("Changed Properties", next(workbook[name].values))
 
     def test_cli_repeatable_mapping(self):
         self.old.write_text(self.old.read_text(encoding="utf-8").replace('"" OLD', '"" OLD_RX'), encoding="utf-8")
