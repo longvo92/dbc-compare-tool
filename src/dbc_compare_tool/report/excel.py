@@ -84,19 +84,16 @@ def write_excel_report(result: ComparisonResult, output_path: Path) -> Path:
     overview_sheet = workbook.create_sheet("DBC Overview")
     message_sheet = workbook.create_sheet("Message Details")
     signal_sheet = workbook.create_sheet("Signal Details")
-    diff_sheet = workbook.create_sheet("Changed Properties")
 
     _write_summary(summary_sheet, result)
     _write_overview(overview_sheet, result.file_pairs)
     _write_message_details(message_sheet, result.message_changes)
     _write_signal_details(signal_sheet, result.signal_changes)
-    _write_property_diff(diff_sheet, result.message_changes, result.signal_changes)
 
     _format_summary(summary_sheet)
     _format_overview_sheet(overview_sheet)
     _format_detail_sheet(message_sheet, change_col=2, conf_score_col=6, conf_level_col=7)
     _format_detail_sheet(signal_sheet, change_col=4, conf_score_col=7, conf_level_col=8)
-    _format_property_diff_sheet(diff_sheet)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output_path)
@@ -160,6 +157,7 @@ def _write_message_details(sheet, changes: list[Change]) -> None:
         "Confidence Level",
         "Match Reason",
         *_CONTEXT_HEADERS[1:],
+        "Changed Properties",
     ])
     for change in changes:
         can_id, transmitter, receivers = _context_values(change)
@@ -174,6 +172,7 @@ def _write_message_details(sheet, changes: list[Change]) -> None:
             _match_reason(change),
             transmitter,
             receivers,
+            _changed_properties(change),
         ])
 
 
@@ -189,6 +188,7 @@ def _write_signal_details(sheet, changes: list[Change]) -> None:
         "Confidence Level",
         "Match Reason",
         *_CONTEXT_HEADERS,
+        "Changed Properties",
     ])
     for change in changes:
         sheet.append([
@@ -201,53 +201,8 @@ def _write_signal_details(sheet, changes: list[Change]) -> None:
             change.confidence_level,
             _match_reason(change),
             *_context_values(change, signal=True),
+            _changed_properties(change),
         ])
-
-
-def _write_property_diff(
-    sheet,
-    message_changes: list[Change],
-    signal_changes: list[Change],
-) -> None:
-    sheet.append([
-        "DBC File",
-        "Entity Type",
-        "Old Name",
-        "New Name",
-        "Parent Message (Old)",
-        "Parent Message (New)",
-        "Change Type",
-        "Property",
-        "Value",
-        *_CONTEXT_HEADERS,
-    ])
-    for change in message_changes:
-        for prop, old_val, new_val in change.property_diffs:
-            sheet.append([
-                _dbc_label(change.dbc_file),
-                "Message",
-                change.old_name,
-                change.new_name,
-                "",
-                "",
-                change.change_type,
-                prop,
-                _fmt_transition(old_val, new_val, change_type=change.change_type),
-                *_context_values(change),
-            ])
-    for change in signal_changes:
-        for prop, old_val, new_val in change.property_diffs:
-            sheet.append([
-                _dbc_label(change.dbc_file),
-                "Signal",
-                change.old_name,
-                change.new_name,
-                *_parent_message_names(change),
-                change.change_type,
-                prop,
-                _fmt_transition(old_val, new_val, change_type=change.change_type),
-                *_context_values(change, signal=True),
-            ])
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +303,7 @@ def _format_detail_sheet(
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
 
-    for row_idx, row in enumerate(sheet.iter_rows(min_row=2), start=2):
+    for row in sheet.iter_rows(min_row=2):
         change_type = str(row[change_col - 1].value or "")
         row_bg = _CHANGE_ROW_FILL.get(change_type, "FFFFFF")
         row_fill = PatternFill("solid", fgColor=row_bg)
@@ -369,8 +324,6 @@ def _format_detail_sheet(
         # Center-align confidence score
         row[conf_score_col - 1].alignment = Alignment(horizontal="center", vertical="top")
 
-        sheet.row_dimensions[row_idx].height = 18
-
     # Auto-width columns (capped at 60)
     for col_cells in sheet.columns:
         max_len = max(len(str(cell.value or "")) for cell in col_cells)
@@ -378,40 +331,17 @@ def _format_detail_sheet(
         sheet.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 60)
 
 
-def _format_property_diff_sheet(sheet) -> None:
-    header_fill = PatternFill("solid", fgColor=_HEADER_BG)
-    header_font = Font(color=_HEADER_FG, bold=True, size=11)
-
-    for cell in sheet[1]:
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell.border = _BORDER
-    sheet.row_dimensions[1].height = 26
-
-    sheet.freeze_panes = "A2"
-    sheet.auto_filter.ref = sheet.dimensions
-
-    for row_idx, row in enumerate(sheet.iter_rows(min_row=2), start=2):
-        change_type = str(row[6].value or "")  # column 7 = Change Type
-        row_fill = PatternFill("solid", fgColor=_CHANGE_ROW_FILL.get(change_type, "FFFFFF"))
-
-        for cell in row:
-            cell.fill = row_fill
-            cell.alignment = Alignment(wrap_text=True, vertical="top")
-            cell.border = _BORDER
-
-        sheet.row_dimensions[row_idx].height = 18
-
-    for col_cells in sheet.columns:
-        max_len = max(len(str(cell.value or "")) for cell in col_cells)
-        col_letter = get_column_letter(col_cells[0].column)
-        sheet.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 50)
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _changed_properties(change: Change) -> str:
+    """Keep all property deltas in the entity's detail row."""
+    return "; ".join(
+        f"{prop}: {_fmt_transition(old, new, change_type=change.change_type)}"
+        for prop, old, new in change.property_diffs
+    )
 
 
 def _fmt_transition(
