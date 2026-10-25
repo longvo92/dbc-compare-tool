@@ -118,6 +118,36 @@ class TestDiscoveryCaseInsensitive(unittest.TestCase):
             self.assertIsNotNone(pairs[0].new_path)
 
 
+class TestDuplicateMessageNames(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.duplicate_dbc = _GOOD_DBC + _GOOD_DBC.replace("BO_ 100 ", "BO_ 200 ")
+
+    def test_parser_rejects_repeated_name_before_dropping_a_frame(self):
+        path = self.root / "duplicate.dbc"
+        path.write_text(self.duplicate_dbc, encoding="utf-8")
+        with self.assertRaisesRegex(DbcParseError, "Duplicate message name 'Node_Status'") as error:
+            parse_dbc(path)
+        self.assertIn(str(path), str(error.exception))
+
+    def test_folder_modes_skip_duplicate_names_and_keep_valid_files(self):
+        old, new = self.root / "old", self.root / "new"
+        old.mkdir()
+        new.mkdir()
+        for folder in (old, new):
+            (folder / "good.dbc").write_text(_GOOD_DBC, encoding="utf-8")
+            (folder / "bad.dbc").write_text(_GOOD_DBC, encoding="utf-8")
+        (old / "bad.dbc").write_text(self.duplicate_dbc, encoding="utf-8")
+        comparator = DbcComparator(include_unchanged=True)
+        for result in (comparator.compare_folders(old, new),
+                       comparator.compare_manual(old, new, {"good.dbc": "good.dbc", "bad.dbc": "bad.dbc"})):
+            self.assertEqual([pair.status for pair in result.file_pairs], ["Parse Error", "Matched"])
+            self.assertEqual(len(result.message_changes), 1)
+            self.assertEqual(result.message_changes[0].dbc_file, "good.dbc -> good.dbc")
+
+
 class TestEncodingFallback(unittest.TestCase):
     def test_cp1252_file_parses(self):
         dbc_text = _GOOD_DBC + 'CM_ BO_ 100 "Temperature in \xb0C";\n'

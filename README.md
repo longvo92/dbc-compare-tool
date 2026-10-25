@@ -77,6 +77,7 @@ From the repository folder, start the GUI with `.\run_gui.bat`, or run the CLI:
 
 - Signal pairing favors finding renames, including small name/start-bit changes. Review **Medium/Low** confidence and **Match Reason**; confidence is a heuristic, not a probability.
 - In folder mode, unreadable files are skipped and marked **Parse Error**. Check **DBC Overview** for missing inputs. A direct file parse error stops the run.
+- Message names must be unique within each DBC. Duplicate names are parse errors. A message that keeps its name but changes CAN ID or frame format is **Modified** when it was not already paired by frame key.
 - **Unchanged** describes an item's own properties. Its parent message or contained signals may still have changes.
 
 ## Documentation

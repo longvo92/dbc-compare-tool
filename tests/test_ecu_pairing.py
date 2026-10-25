@@ -132,12 +132,21 @@ class TestEcuPairing(unittest.TestCase):
 
     def test_message_rename_crosses_threshold_with_mapped_transmitter(self):
         old, new = _database("OLD", ()), _database("NEW", ())
-        new.messages["Status"].can_id = 200
+        renamed = replace(new.messages.pop("Status"), name="StatusNew", can_id=200)
+        new.messages[renamed.name] = renamed
         plain = DbcComparator().compare_databases("bus", old, new)
         mapped = DbcComparator(ecu_map={"OLD": "NEW"}).compare_databases("bus", old, new)
         self.assertEqual({c.change_type for c in plain.message_changes}, {"Added", "Removed"})
         self.assertEqual([c.change_type for c in mapped.message_changes], ["Renamed"])
         self.assertNotIn("Transmitter", dict((key, before) for key, before, after in mapped.message_changes[0].property_diffs))
+
+    def test_same_name_id_change_keeps_ecu_mapping_and_reports_only_real_deltas(self):
+        old, new = _database("OLD", ()), _database("NEW", ())
+        new.messages["Status"].can_id = 200
+        result = DbcComparator(ecu_map={"OLD": "NEW"}).compare_databases("bus", old, new)
+        self.assertEqual([c.change_type for c in result.message_changes], ["Modified"])
+        self.assertEqual(result.message_changes[0].property_diffs, (("CAN ID", "100", "200"),))
+        self.assertEqual(result.signal_changes, [])
 
     def test_signal_rename_scoring_honors_mapped_receivers(self):
         old = _database("OLD", ("OLD",)).messages["Status"].signals["Speed"]

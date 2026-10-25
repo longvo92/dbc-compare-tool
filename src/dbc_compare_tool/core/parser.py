@@ -36,6 +36,8 @@ def parse_dbc(path: Path) -> DbcDatabase:
     )
     for cantools_message in getattr(cantools_db, "messages", []):
         message = _map_message(cantools_message)
+        if message.name in database.messages:
+            raise DbcParseError(f"Duplicate message name '{message.name}' in DBC file: {path}")
         database.messages[message.name] = message
     return database
 

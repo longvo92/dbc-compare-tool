@@ -78,7 +78,10 @@ class TestBulkRename(unittest.TestCase):
         self.assertEqual(status, 0)
         workbook = load_workbook(report)
         self.addCleanup(workbook.close)
-        for sheet_name in ("DBC Overview", "Message Details", "Signal Details"):
+        overview = workbook["DBC Overview"]
+        row = dict(zip(next(overview.values), list(overview.values)[1]))
+        self.assertEqual(row["Path"], f"{self.old.resolve()}->{self.new.resolve()}")
+        for sheet_name in ("Message Details", "Signal Details"):
             rows = list(workbook[sheet_name].values)
             self.assertTrue(all(row[0] == "VCAN_v1.dbc->VCAN_v2.dbc" for row in rows[1:]))
         signals = list(workbook["Signal Details"].values)
@@ -114,7 +117,10 @@ class TestBulkRename(unittest.TestCase):
         self.assertTrue(all(c.dbc_file == expected for c in result.signal_changes))
         workbook = load_workbook(write_excel_report(result, self.root / "same-name.xlsx"))
         self.addCleanup(workbook.close)
-        for name in ("DBC Overview", "Message Details", "Signal Details"):
+        overview = workbook["DBC Overview"]
+        row = dict(zip(next(overview.values), list(overview.values)[1]))
+        self.assertEqual(row["Path"], "nested/VCAN_v1.dbc")
+        for name in ("Message Details", "Signal Details"):
             self.assertTrue(all(row[0] == self.old.name for row in list(workbook[name].values)[1:]))
 
     def test_unpaired_and_parse_error_labels_have_no_folders(self):
