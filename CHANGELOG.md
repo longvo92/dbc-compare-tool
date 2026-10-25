@@ -10,6 +10,8 @@ for the procedure.
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-10-25
+
 ### Fixed
 
 - Report CAN ID or frame-format changes as Modified when the unmatched message keeps its name, and compare its signals normally.
