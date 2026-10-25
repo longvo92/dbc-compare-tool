@@ -103,6 +103,14 @@ class BaselineReportTests(unittest.TestCase):
         self.assertEqual(len(rows), len(self.result.file_pairs))
         self.assertEqual(rows[0]["Status"], "Matched")
 
+    def test_overview_has_one_path_column_and_no_repeated_filename_column(self):
+        sheet = self.workbook["DBC Overview"]
+        self.assertEqual(next(sheet.values),
+                         ("Status", "Path", "Pairing Confidence", "Messages", "Signals", "Pairing Reason"))
+        self.assertEqual(sheet.max_column, 6)
+        self.assertEqual(sheet.auto_filter.ref, sheet.dimensions)
+        self.assertEqual(sheet["A2"].fill.fgColor.rgb, "00F2F2F2")
+
     def test_overview_combines_paths_and_counts_without_losing_zero(self):
         rows = _rows(self.workbook["DBC Overview"])
         for row, pair in zip(rows, self.result.file_pairs):
@@ -153,6 +161,8 @@ class OneSidedReportTests(unittest.TestCase):
                 for row in (added, removed):
                     self.assertTrue(all("->" not in str(value) for value in row.values()))
                 self.assertEqual((matched["Messages"], matched["Signals"]), ("0->1", "1->0"))
+                self.assertEqual([workbook["DBC Overview"].cell(row, 1).fill.fgColor.rgb
+                                  for row in (2, 3, 4)], ["00E2EFDA", "00FCE4D6", "00F2F2F2"])
             finally:
                 workbook.close()
 

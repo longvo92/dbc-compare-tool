@@ -27,6 +27,8 @@ Paths below are relative to `src/dbc_compare_tool/`.
 
 Added or removed DBCs are compared against an empty database so their messages and signals appear in the detail sheets. Folder parse errors are recorded per file; other files continue. Direct file parse errors stop the run. ECU discovery skips unreadable files in folder mode.
 
+Duplicate message names are parse errors because the database model requires unique message names.
+
 ## Comparison Contracts
 
 - `compare_paths` accepts matching input types. `compare_files` treats the two selected files as one explicit pair.
@@ -42,10 +44,12 @@ Added or removed DBCs are compared against an empty database so their messages a
 | Item | Matching order | Fallback threshold |
 |---|---|---|
 | DBC files | Equal relative path, then global keyword/content assignment | 0.55 |
-| Messages | Equal frame key, then structural similarity | 0.60 |
+| Messages | Equal frame key, equal name among unmatched messages, then structural similarity | 0.60 |
 | Signals | Exact name, unique complete-property match, then similarity | 0.65; 0.55 for event-like messages |
 
 A renamed message with the same frame key has confidence 1.0. Unique complete-property signal matches are reserved with confidence 1.0, unless a nearby shifted candidate has stronger evidence. ECU mappings apply to receivers before matching. Start-bit shifts up to 8 bits receive partial position credit.
+
+An unmatched message that keeps its name is Modified when its CAN ID or frame format changes. Signals are compared within that pair.
 
 Remaining signals use global one-to-one assignment: maximize eligible pair count, then total similarity. Complete-property matches remain eligible even with weak name similarity. Message fallback matching remains greedy.
 
@@ -59,7 +63,7 @@ Scoring constants and formulas are defined in [pairing.py](../src/dbc_compare_to
 
 The workbook contains `Summary`, `DBC Overview`, `Message Details` and `Signal Details`.
 
-Detail sheets contain identity, CAN IDs, ECU Tx/Rx, match confidence/reasons and one `Changed Properties` column. Each property delta uses `Property: old->new`; multiple deltas share the same cell, separated by `; `. Empty delta lists produce blank cells. Summary records report mode, ECU mappings and skipped parse errors. DBC Overview retains file paths; detail display labels use basenames.
+Detail sheets contain identity, CAN IDs, ECU Tx/Rx, match confidence/reasons and one `Changed Properties` column. Each property delta uses `Property: old->new`; multiple deltas share the same cell, separated by `; `. Empty delta lists produce blank cells. Numeric deltas preserve floating-point precision. Summary records report mode, ECU mappings and skipped parse errors. DBC Overview uses one full `Path` column for OLD/NEW paths; detail display labels use basenames.
 
 The writer keeps entity names and parent message names in separate OLD/NEW columns. Other fields combine OLD/NEW values: equal values appear once; changes use `old->new`, retaining empty sides for modified properties. Added/Removed entries show only the existing side without an arrow, including zero inventory counts for added or removed DBCs. Comparison results retain separate OLD/NEW data.
 

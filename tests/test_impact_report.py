@@ -223,6 +223,24 @@ class ImpactReportTests(unittest.TestCase):
         self.assertEqual(rows[0]["Changed Properties"],
                          "DLC: 8->16; Cycle Time: 10->20; Description: Vehicle status->Updated status")
 
+    def test_numeric_property_deltas_keep_distinct_round_trip_values(self):
+        for attribute, label in (("factor", "Factor"), ("offset", "Offset"),
+                                 ("minimum", "Min"), ("maximum", "Max")):
+            for before, after in ((0.1234567, 0.1234568), (10000001.0, 10000002.0),
+                                  (1e-20, 2e-20)):
+                with self.subTest(property=label, before=before, after=after):
+                    old_signal = replace(self.message.signals["Speed"], **{attribute: before})
+                    new_signal = replace(old_signal, **{attribute: after})
+                    old = replace(self.message, signals={"Speed": old_signal})
+                    new = replace(self.message, signals={"Speed": new_signal})
+                    result = self._compare(_database(old), _database(new))
+                    delta, = result.signal_changes[0].property_diffs
+                    self.assertEqual(delta[0], label)
+                    self.assertNotEqual(delta[1], delta[2])
+                    self.assertEqual((float(delta[1]), float(delta[2])), (before, after))
+                    row = _rows(self._report(result)["Signal Details"])[0]
+                    self.assertEqual(row["Changed Properties"], f"{label}: {delta[1]}->{delta[2]}")
+
     def test_cleared_property_in_modified_message_keeps_transition(self):
         new = replace(self.message, comment="")
         workbook = self._report(self._compare(new=_database(new)))

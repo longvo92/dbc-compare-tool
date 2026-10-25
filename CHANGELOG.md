@@ -10,6 +10,16 @@ for the procedure.
 
 ## [Unreleased]
 
+### Fixed
+
+- Report CAN ID or frame-format changes as Modified when the unmatched message keeps its name, and compare its signals normally.
+- Preserve numeric precision in property deltas so distinct factor, offset and limit values remain visible.
+- Reject duplicate message names as parse errors instead of losing messages during comparison.
+
+### Changed
+
+- Keep one full `Path` column in DBC Overview and remove the redundant `DBC File` column.
+
 ## [0.6.5] - 2026-10-23
 
 ### Changed

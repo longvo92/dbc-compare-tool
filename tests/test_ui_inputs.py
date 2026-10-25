@@ -327,6 +327,45 @@ class GuiInputTests(unittest.TestCase):
             row = dict(zip(values[0], values[1]))
             self.assertEqual(row["Changed Properties"], expected)
 
+    def test_gui_exports_same_name_id_change_precise_values_and_one_dbc_path(self):
+        self._files()
+        old = _DBC.format(sender="OldNode").replace("(1,0)", "(0.1234567,0)")
+        self.old.write_text(old, encoding="utf-8")
+        self.new.write_text(old.replace("BO_ 100 ", "BO_ 400 ").replace("0.1234567", "0.1234568"),
+                            encoding="utf-8")
+        report = self.root / "precise.xlsx"
+        self.window.output_input.setText(str(report))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.window._run_compare()
+            self._wait_until(lambda: self.window.run_button.isEnabled())
+        error.assert_not_called()
+        workbook = load_workbook(report)
+        self.addCleanup(workbook.close)
+        for name, expected in (("Message Details", "CAN ID: 100->400"),
+                               ("Signal Details", "Factor: 0.1234567->0.1234568")):
+            values = list(workbook[name].values)
+            self.assertEqual(len(values), 2)
+            row = dict(zip(values[0], values[1]))
+            self.assertEqual(row["Change Type"], "Modified")
+            self.assertEqual(row["Changed Properties"], expected)
+        overview = workbook["DBC Overview"]
+        self.assertNotIn("DBC File", next(overview.values))
+        row = dict(zip(next(overview.values), list(overview.values)[1]))
+        self.assertEqual(row["Path"], f"{self.old.resolve()}->{self.new.resolve()}")
+
+    def test_gui_rejects_duplicate_message_names_without_exporting(self):
+        self._files()
+        old = _DBC.format(sender="OldNode")
+        self.old.write_text(old + old.replace("BO_ 100 ", "BO_ 200 "), encoding="utf-8")
+        report = self.root / "duplicate.xlsx"
+        self.window.output_input.setText(str(report))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.window._run_compare()
+            self._wait_until(lambda: self.window.run_button.isEnabled())
+        error.assert_called_once()
+        self.assertIn("Duplicate message name 'Status'", error.call_args.args[-1])
+        self.assertFalse(report.exists())
+
     def test_shifted_signal_pairing_confidence_is_exported_by_gui(self):
         from tests.test_signal_pairing import shifted_dbc
 

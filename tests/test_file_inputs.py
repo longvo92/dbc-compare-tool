@@ -68,6 +68,32 @@ class TestFileInputs(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("Unable to parse DBC", error)
 
+    def test_duplicate_message_name_is_a_cli_parse_error_without_report(self):
+        old = self.old.read_text(encoding="utf-8")
+        self.old.write_text(old + old.replace("BO_ 100 ", "BO_ 200 "), encoding="utf-8")
+        status, _, error = self._cli()
+        self.assertEqual(status, 1)
+        self.assertIn("Duplicate message name 'Status'", error)
+        self.assertFalse(list(self.root.glob("*.xlsx")))
+
+    def test_cli_exports_same_name_id_change_and_precise_factor_delta(self):
+        old = self.old.read_text(encoding="utf-8").replace("(1,0)", "(0.1234567,0)")
+        self.old.write_text(old, encoding="utf-8")
+        self.new.write_text(old.replace("BO_ 100 ", "BO_ 400 ").replace("0.1234567", "0.1234568"),
+                            encoding="utf-8")
+        report = self.root / "precise.xlsx"
+        status, _, error = self._cli("--out", str(report))
+        self.assertEqual((status, error), (0, ""))
+        workbook = load_workbook(report)
+        self.addCleanup(workbook.close)
+        for name, expected in (("Message Details", "CAN ID: 100->400"),
+                               ("Signal Details", "Factor: 0.1234567->0.1234568")):
+            values = list(workbook[name].values)
+            self.assertEqual(len(values), 2)
+            row = dict(zip(values[0], values[1]))
+            self.assertEqual(row["Change Type"], "Modified")
+            self.assertEqual(row["Changed Properties"], expected)
+
     def test_cli_files_mapping_and_default_report_name(self):
         status, output, error = self._cli("--ecu-pair", "OLD=NEW", "--include-unchanged")
         self.assertEqual((status, error), (0, ""))

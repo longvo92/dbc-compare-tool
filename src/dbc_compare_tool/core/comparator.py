@@ -408,11 +408,35 @@ class DbcComparator:
         unmatched_old_msgs = [old_by_id[fid] for fid in old_only_ids]
         unmatched_new_msgs = [new_by_id[fid] for fid in new_only_ids]
 
-        detector = MessageRenameDetector(ecu_map=self.ecu_map)
-        rename_matches = detector.match(unmatched_old_msgs, unmatched_new_msgs)
+        # Preserve known names after frame-key matching, before heuristic renames.
+        old_by_name = {message.name: message for message in unmatched_old_msgs}
+        new_by_name = {message.name: message for message in unmatched_new_msgs}
+        common_names = old_by_name.keys() & new_by_name.keys()
+        for name in sorted(common_names):
+            old_message, new_message = old_by_name[name], new_by_name[name]
+            description, property_diffs = self._property_changes(old_message, new_message)
+            result.message_changes.append(Change(
+                dbc_file=dbc_file,
+                change_type="Modified",
+                old_name=name,
+                new_name=name,
+                confidence=None,
+                description=description,
+                can_id=new_message.can_id,
+                property_diffs=property_diffs,
+            ))
+            self._compare_signals(dbc_file, old_message, new_message, result)
 
-        matched_old_ids = {_frame_key(match.old) for match in rename_matches}
-        matched_new_ids = {_frame_key(match.new) for match in rename_matches}
+        detector = MessageRenameDetector(ecu_map=self.ecu_map)
+        rename_matches = detector.match(
+            [message for message in unmatched_old_msgs if message.name not in common_names],
+            [message for message in unmatched_new_msgs if message.name not in common_names],
+        )
+
+        matched_old_ids = {_frame_key(old_by_name[name]) for name in common_names}
+        matched_new_ids = {_frame_key(new_by_name[name]) for name in common_names}
+        matched_old_ids.update(_frame_key(match.old) for match in rename_matches)
+        matched_new_ids.update(_frame_key(match.new) for match in rename_matches)
 
         for match in rename_matches:
             old_message = match.old
@@ -659,7 +683,9 @@ def _format_property_value(key: str, value: object) -> str:
     if isinstance(value, bool):
         return "Yes" if value else "No"
     if isinstance(value, float):
-        return f"{value:g}"
+        # Preserve distinct floating-point values, keeping integral values compact.
+        text = repr(value)
+        return text[:-2] if text.endswith(".0") else text
     if key == "Value Descriptions" and isinstance(value, tuple):
         return ", ".join(f"{raw}={label}" for raw, label in value) if value else "blank"
     if isinstance(value, tuple):

@@ -126,7 +126,6 @@ def _write_summary(sheet, result: ComparisonResult) -> None:
 
 def _write_overview(sheet, file_pairs: list[FilePairSummary]) -> None:
     sheet.append([
-        "DBC File",
         "Status",
         "Path",
         "Pairing Confidence",
@@ -136,7 +135,6 @@ def _write_overview(sheet, file_pairs: list[FilePairSummary]) -> None:
     ])
     for fp in file_pairs:
         sheet.append([
-            _dbc_label(fp.dbc_file),
             fp.status,
             _fmt_transition(fp.old_path, fp.new_path, change_type=fp.status),
             _fmt_confidence(fp.pairing_confidence),
@@ -270,7 +268,7 @@ def _format_overview_sheet(sheet) -> None:
     sheet.auto_filter.ref = sheet.dimensions
 
     for row_idx, row in enumerate(sheet.iter_rows(min_row=2), start=2):
-        status = str(row[1].value or "")
+        status = str(row[0].value or "")
         row_fill = PatternFill("solid", fgColor=_STATUS_FILL.get(status, "FFFFFF"))
         for cell in row:
             cell.fill = row_fill
