@@ -10,6 +10,8 @@ for the procedure.
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-10-26
+
 ### Changed
 
 - Omit DBC Overview when comparing two selected DBC files; folder reports keep the file overview.
