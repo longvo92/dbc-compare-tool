@@ -12,7 +12,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from dbc_compare_tool.core.comparator import DbcComparator
+from dbc_compare_tool.core.comparator import DbcComparator, filter_result
 from dbc_compare_tool.core.models import ComparisonResult, FilePairSummary
 from dbc_compare_tool.report.excel import default_report_path, write_excel_report
 
@@ -165,6 +165,57 @@ class OneSidedReportTests(unittest.TestCase):
                                   for row in (2, 3, 4)], ["00E2EFDA", "00FCE4D6", "00F2F2F2"])
             finally:
                 workbook.close()
+
+
+class ReportInputModeTests(unittest.TestCase):
+    def test_file_reports_omit_overview_with_same_or_different_names_and_filters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old_folder, new_folder = root / "old", root / "new"
+            old_folder.mkdir()
+            new_folder.mkdir()
+            old = old_folder / "bus.dbc"
+            old.write_text('VERSION ""\nBO_ 100 Status: 8 ECU\n', encoding="utf-8")
+            for new_name in ("bus.dbc", "renamed.dbc"):
+                new = new_folder / new_name
+                new.write_text(old.read_text(encoding="utf-8"), encoding="utf-8")
+                for include_unchanged in (False, True):
+                    with self.subTest(new_name=new_name, include_unchanged=include_unchanged):
+                        result = DbcComparator(include_unchanged=include_unchanged).compare_paths(old, new)
+                        result = filter_result(result, {"Modified"})
+                        self.assertEqual(len(result.file_pairs), 1)
+                        output = write_excel_report(result, root / "files.xlsx")
+                        workbook = load_workbook(output)
+                        try:
+                            self.assertEqual(workbook.sheetnames, ["Summary", "Message Details", "Signal Details"])
+                            self.assertEqual(workbook["Message Details"].max_row, 2 if include_unchanged else 1)
+                        finally:
+                            workbook.close()
+
+    def test_folder_reports_keep_overview_for_one_pair_including_manual_pairing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old_folder, new_folder = root / "old", root / "new"
+            old_folder.mkdir()
+            new_folder.mkdir()
+            for folder in (old_folder, new_folder):
+                (folder / "bus.dbc").write_text('VERSION ""\nBO_ 100 Status: 8 ECU\n', encoding="utf-8")
+            comparator = DbcComparator()
+            results = (
+                comparator.compare_paths(old_folder, new_folder),
+                comparator.compare_manual(old_folder, new_folder, {"bus.dbc": "bus.dbc"}),
+            )
+            for result in results:
+                with self.subTest(status=result.file_pairs[0].status):
+                    self.assertEqual(len(result.file_pairs), 1)
+                    output = write_excel_report(filter_result(result, {"Modified"}), root / "folders.xlsx")
+                    workbook = load_workbook(output)
+                    try:
+                        self.assertEqual(workbook.sheetnames,
+                                         ["Summary", "DBC Overview", "Message Details", "Signal Details"])
+                        self.assertEqual(workbook["DBC Overview"].max_row, 2)
+                    finally:
+                        workbook.close()
 
 
 class DefaultReportPathTests(unittest.TestCase):

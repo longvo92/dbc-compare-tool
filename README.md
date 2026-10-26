@@ -38,7 +38,7 @@ See the [User Guide](resources/help/user_guide.md) for pairing, CLI and Excel ba
 | Sheet | Use it to |
 |---|---|
 | Summary | Check change counts and selected ECU mappings |
-| DBC Overview | Review file pairs, paths and parse errors |
+| DBC Overview (folder mode only) | Review file pairs, paths and parse errors |
 | Message Details | Review message changes and ECU routing |
 | Signal Details | Review signal changes and rename confidence |
 

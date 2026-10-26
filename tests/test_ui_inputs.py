@@ -317,7 +317,7 @@ class GuiInputTests(unittest.TestCase):
         self.window.export_worker.wait(5000)
         workbook = load_workbook(report)
         self.addCleanup(workbook.close)
-        self.assertEqual(workbook.sheetnames, ["Summary", "DBC Overview", "Message Details", "Signal Details"])
+        self.assertEqual(workbook.sheetnames, ["Summary", "Message Details", "Signal Details"])
         for name, expected in (
             ("Message Details", "Description: ->Updated status"),
             ("Signal Details", "Start Bit: 0->1; Factor: 1->2"),
@@ -327,7 +327,7 @@ class GuiInputTests(unittest.TestCase):
             row = dict(zip(values[0], values[1]))
             self.assertEqual(row["Changed Properties"], expected)
 
-    def test_gui_exports_same_name_id_change_precise_values_and_one_dbc_path(self):
+    def test_gui_exports_same_name_id_change_and_precise_values_without_overview(self):
         self._files()
         old = _DBC.format(sender="OldNode").replace("(1,0)", "(0.1234567,0)")
         self.old.write_text(old, encoding="utf-8")
@@ -348,10 +348,26 @@ class GuiInputTests(unittest.TestCase):
             row = dict(zip(values[0], values[1]))
             self.assertEqual(row["Change Type"], "Modified")
             self.assertEqual(row["Changed Properties"], expected)
-        overview = workbook["DBC Overview"]
-        self.assertNotIn("DBC File", next(overview.values))
-        row = dict(zip(next(overview.values), list(overview.values)[1]))
-        self.assertEqual(row["Path"], f"{self.old.resolve()}->{self.new.resolve()}")
+        self.assertEqual(workbook.sheetnames, ["Summary", "Message Details", "Signal Details"])
+
+    def test_gui_folder_report_keeps_overview_for_one_pair(self):
+        old_folder, new_folder = self.root / "old", self.root / "new"
+        for folder in (old_folder, new_folder):
+            folder.mkdir()
+            (folder / "bus.dbc").write_text(_DBC.format(sender="OldNode"), encoding="utf-8")
+        self.window.input_mode.setCurrentIndex(self.window.input_mode.findData("folders"))
+        self.window.old_input.setText(str(old_folder))
+        self.window.new_input.setText(str(new_folder))
+        report = self.root / "folder.xlsx"
+        self.window.output_input.setText(str(report))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.window._run_compare()
+            self._wait_until(lambda: self.window.run_button.isEnabled())
+        error.assert_not_called()
+        workbook = load_workbook(report)
+        self.addCleanup(workbook.close)
+        self.assertEqual(workbook.sheetnames, ["Summary", "DBC Overview", "Message Details", "Signal Details"])
+        self.assertEqual(workbook["DBC Overview"].max_row, 2)
 
     def test_gui_rejects_duplicate_message_names_without_exporting(self):
         self._files()

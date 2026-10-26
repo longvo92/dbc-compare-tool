@@ -61,7 +61,7 @@ Scoring constants and formulas are defined in [pairing.py](../src/dbc_compare_to
 
 ## Report
 
-The workbook contains `Summary`, `DBC Overview`, `Message Details` and `Signal Details`.
+The workbook contains `Summary`, `Message Details` and `Signal Details`. Folder comparisons also include `DBC Overview` after Summary, even when only one file pair exists. `ComparisonResult.is_file_comparison` records explicit file mode and survives change-type filtering so CLI and GUI use the same sheet selection.
 
 Detail sheets contain identity, CAN IDs, ECU Tx/Rx, match confidence/reasons and one `Changed Properties` column. Each property delta uses `Property: old->new`; multiple deltas share the same cell, separated by `; `. Empty delta lists produce blank cells. Numeric deltas preserve floating-point precision. Summary records report mode, ECU mappings and skipped parse errors. DBC Overview uses one full `Path` column for OLD/NEW paths; detail display labels use basenames.
 

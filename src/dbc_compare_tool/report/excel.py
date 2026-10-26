@@ -81,17 +81,18 @@ def write_excel_report(result: ComparisonResult, output_path: Path) -> Path:
     workbook = Workbook()
     summary_sheet = workbook.active
     summary_sheet.title = "Summary"
-    overview_sheet = workbook.create_sheet("DBC Overview")
+    if not result.is_file_comparison:
+        overview_sheet = workbook.create_sheet("DBC Overview")
+        _write_overview(overview_sheet, result.file_pairs)
+        _format_overview_sheet(overview_sheet)
     message_sheet = workbook.create_sheet("Message Details")
     signal_sheet = workbook.create_sheet("Signal Details")
 
     _write_summary(summary_sheet, result)
-    _write_overview(overview_sheet, result.file_pairs)
     _write_message_details(message_sheet, result.message_changes)
     _write_signal_details(signal_sheet, result.signal_changes)
 
     _format_summary(summary_sheet)
-    _format_overview_sheet(overview_sheet)
     _format_detail_sheet(message_sheet, change_col=2, conf_score_col=6, conf_level_col=7)
     _format_detail_sheet(signal_sheet, change_col=4, conf_score_col=7, conf_level_col=8)
 

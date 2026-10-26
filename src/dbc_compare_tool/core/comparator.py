@@ -90,6 +90,7 @@ class DbcComparator:
         if progress_callback:
             progress_callback(f"[1/1] Comparing selected files: {label}")
         result = self.compare_databases(label, old_db, new_db)
+        result.is_file_comparison = True
         result.file_pairs.append(_file_pair_summary(
             label=label,
             status="Matched" if old_path.name == new_path.name else "Manually Paired",
@@ -617,6 +618,7 @@ def filter_result(result: ComparisonResult, selected_types: set[str]) -> Compari
         file_pairs=result.file_pairs,
         include_unchanged=result.include_unchanged,
         ecu_map=dict(result.ecu_map),
+        is_file_comparison=result.is_file_comparison,
     )
 
 
