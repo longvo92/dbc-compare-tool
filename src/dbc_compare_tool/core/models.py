@@ -141,6 +141,7 @@ class ComparisonResult:
     file_pairs: list[FilePairSummary] = field(default_factory=list)
     include_unchanged: bool = False
     ecu_map: dict[str, str] = field(default_factory=dict)
+    is_file_comparison: bool = False
 
     def summary(self) -> dict[str, int]:
         metrics = {

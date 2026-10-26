@@ -35,6 +35,7 @@ class TestFileInputs(unittest.TestCase):
         progress = []
         result = DbcComparator().compare_paths(self.old, self.new, progress.append)
         self.assertEqual(len(result.file_pairs), 1)
+        self.assertTrue(result.is_file_comparison)
         pair = result.file_pairs[0]
         self.assertEqual((pair.old_path, pair.new_path), (str(self.old.resolve()), str(self.new.resolve())))
         self.assertEqual(pair.status, "Manually Paired")
@@ -102,7 +103,7 @@ class TestFileInputs(unittest.TestCase):
         self.assertTrue(report.is_file())
         workbook = load_workbook(report)
         self.addCleanup(workbook.close)
-        self.assertNotIn("Changed Properties", workbook.sheetnames)
+        self.assertEqual(workbook.sheetnames, ["Summary", "Message Details", "Signal Details"])
         for name in ("Message Details", "Signal Details"):
             self.assertIn("Changed Properties", next(workbook[name].values))
 

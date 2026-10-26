@@ -16,7 +16,7 @@ For folders, pass two folder paths. Add `--include-unchanged` for all entries. R
 
 ## Excel Basics
 
-- Start with **Summary** for totals and **DBC Overview** to check file pairs and parse errors.
+- Start with **Summary** for totals. Folder reports also include **DBC Overview** to check file pairs and parse errors; file reports omit this sheet.
 - Filter **Message Details** and **Signal Details** by change type, CAN ID or ECU. Review **Medium/Low** confidence and **Match Reason**.
 - Message and signal names, including parent message names, use separate OLD/NEW columns. Other fields show unchanged values once (`EVCC`) and changes as `EVCC->EVCC2`. Added/removed entries show only the existing value, without an arrow.
 - Read the **Changed Properties** column in each detail sheet. Multiple changes share one cell, separated by `; `, for example `Start Bit: 56->57; Length: 8->16`. Entries without property changes leave this cell blank.

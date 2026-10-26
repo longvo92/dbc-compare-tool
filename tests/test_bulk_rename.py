@@ -78,9 +78,7 @@ class TestBulkRename(unittest.TestCase):
         self.assertEqual(status, 0)
         workbook = load_workbook(report)
         self.addCleanup(workbook.close)
-        overview = workbook["DBC Overview"]
-        row = dict(zip(next(overview.values), list(overview.values)[1]))
-        self.assertEqual(row["Path"], f"{self.old.resolve()}->{self.new.resolve()}")
+        self.assertEqual(workbook.sheetnames, ["Summary", "Message Details", "Signal Details"])
         for sheet_name in ("Message Details", "Signal Details"):
             rows = list(workbook[sheet_name].values)
             self.assertTrue(all(row[0] == "VCAN_v1.dbc->VCAN_v2.dbc" for row in rows[1:]))
