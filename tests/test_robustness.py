@@ -143,9 +143,13 @@ class TestDuplicateMessageNames(unittest.TestCase):
         comparator = DbcComparator(include_unchanged=True)
         for result in (comparator.compare_folders(old, new),
                        comparator.compare_manual(old, new, {"good.dbc": "good.dbc", "bad.dbc": "bad.dbc"})):
-            self.assertEqual([pair.status for pair in result.file_pairs], ["Parse Error", "Matched"])
-            self.assertEqual(len(result.message_changes), 1)
-            self.assertEqual(result.message_changes[0].dbc_file, "good.dbc -> good.dbc")
+            self.assertEqual(result.completeness, "Incomplete")
+            self.assertEqual(len(result.diagnostics), 1)
+            self.assertIn("Matched", [pair.status for pair in result.file_pairs])
+            good = [change for change in result.message_changes if change.dbc_file == "good.dbc -> good.dbc"]
+            self.assertEqual(len(good), 1)
+            self.assertEqual(good[0].change_type, "Unchanged")
+
 
 
 class TestEncodingFallback(unittest.TestCase):

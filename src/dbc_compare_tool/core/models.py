@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from dbc_compare_tool.core.policy import RECALL_V1, MatchingPolicy
+
 
 def jaccard(left: set[tuple[Any, ...]], right: set[tuple[Any, ...]]) -> float:
     """Jaccard similarity of two sets. Two empty sets count as identical."""
@@ -108,11 +110,12 @@ class FilePairSummary:
     old_path: str
     new_path: str
     pairing_confidence: float | None
-    message_count_old: int
-    message_count_new: int
-    signal_count_old: int
-    signal_count_new: int
+    message_count_old: int | None
+    message_count_new: int | None
+    signal_count_old: int | None
+    signal_count_new: int | None
     pairing_reasons: tuple[str, ...] = ()
+    pairing: PairingMetadata | None = None
 
 
 @dataclass(frozen=True)
@@ -132,6 +135,60 @@ class Change:
     new_message: Message | None = None
     old_signal: Signal | None = None
     new_signal: Signal | None = None
+    pairing: PairingMetadata | None = None
+
+
+@dataclass(frozen=True, order=True)
+class EntityIdentity:
+    side: str
+    dbc_path: str
+    kind: str
+    frame_id: int = -1
+    extended: bool = False
+    message_name: str = ""
+    signal_name: str = ""
+
+    def display(self) -> str:
+        import json
+
+        # JSON escaping keeps identities unambiguous even for unusual path names.
+        return json.dumps([
+            self.side, self.dbc_path, self.kind, self.frame_id, self.extended,
+            self.message_name, self.signal_name,
+        ], ensure_ascii=False, separators=(",", ":"))
+
+    @property
+    def parent(self) -> tuple:
+        if self.kind == "signal":
+            return self.dbc_path, self.frame_id, self.extended, self.message_name
+        return (self.dbc_path,)
+
+
+@dataclass
+class PairingMetadata:
+    old: EntityIdentity | None
+    new: EntityIdentity | None
+    similarity: float | None = None
+    confidence: float | None = None
+    evidence: tuple[str, ...] = ()
+    competitors: tuple[tuple[EntityIdentity, EntityIdentity, float], ...] = ()
+    requires_review: bool = False
+    selected: bool = True
+    fixed: bool = False
+    category: str = "Pair"
+    pair_id: str = ""
+    policy: MatchingPolicy = RECALL_V1
+
+    @property
+    def confidence_level(self) -> str:
+        return self.policy.confidence_level(self.confidence)
+
+
+@dataclass(frozen=True)
+class Diagnostic:
+    side: str
+    path: str
+    reason: str
 
 
 @dataclass
@@ -142,6 +199,36 @@ class ComparisonResult:
     include_unchanged: bool = False
     ecu_map: dict[str, str] = field(default_factory=dict)
     is_file_comparison: bool = False
+    diagnostics: list[Diagnostic] = field(default_factory=list)
+    inventory: dict[EntityIdentity, str] = field(default_factory=dict)
+    pairings: list[PairingMetadata] = field(default_factory=list)
+    pairing_candidates: list[PairingMetadata] = field(default_factory=list)
+    move_suggestions: list[PairingMetadata] = field(default_factory=list)
+    policy_version: str = "recall-v1"
+
+    @property
+    def completeness(self) -> str:
+        return "Incomplete" if self.diagnostics else "Complete"
+
+    @property
+    def review_count(self) -> int:
+        return sum(pair.requires_review for pair in self.pairings)
+
+    @property
+    def coverage(self) -> dict[str, dict[str, int | None]]:
+        from collections import Counter
+
+        counts = {
+            f"{side} {kind}": dict(Counter(
+                status for identity, status in self.inventory.items()
+                if identity.side == side and identity.kind == kind
+            ))
+            for side in ("OLD", "NEW") for kind in ("dbc", "message", "signal")
+        }
+        for diagnostic in self.diagnostics:
+            for kind in ("dbc", "message", "signal"):
+                counts[f"{diagnostic.side} {kind}"]["unknown"] = None
+        return counts
 
     def summary(self) -> dict[str, int]:
         metrics = {

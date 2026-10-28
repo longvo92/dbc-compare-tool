@@ -14,7 +14,7 @@ from dbc_compare_tool.core.ecu import collect_ecu_nodes, validate_ecu_map
 from dbc_compare_tool.core.models import DbcDatabase, Message, Signal
 from dbc_compare_tool.core.pairing import DatabaseCandidate, match_renamed_databases
 from dbc_compare_tool.core.parser import parse_dbc
-from dbc_compare_tool.core.rename import MessageRenameDetector, SignalRenameDetector
+from dbc_compare_tool.core.policy import RECALL_V1, message_evidence, signal_evidence
 
 
 def _database(tx: str, rx: tuple[str, ...], *, factor: float = 1.0) -> DbcDatabase:
@@ -136,7 +136,8 @@ class TestEcuPairing(unittest.TestCase):
         new.messages[renamed.name] = renamed
         plain = DbcComparator().compare_databases("bus", old, new)
         mapped = DbcComparator(ecu_map={"OLD": "NEW"}).compare_databases("bus", old, new)
-        self.assertEqual({c.change_type for c in plain.message_changes}, {"Added", "Removed"})
+        self.assertEqual([c.change_type for c in plain.message_changes], ["Renamed"])
+        self.assertGreater(mapped.message_changes[0].pairing.similarity, plain.message_changes[0].pairing.similarity)
         self.assertEqual([c.change_type for c in mapped.message_changes], ["Renamed"])
         self.assertNotIn("Transmitter", dict((key, before) for key, before, after in mapped.message_changes[0].property_diffs))
 
@@ -151,24 +152,24 @@ class TestEcuPairing(unittest.TestCase):
     def test_signal_rename_scoring_honors_mapped_receivers(self):
         old = _database("OLD", ("OLD",)).messages["Status"].signals["Speed"]
         new = replace(old, name="Velocity", receivers=("NEW",), factor=2.0)
-        self.assertFalse(SignalRenameDetector().match([old], [new]))
-        matches = SignalRenameDetector(ecu_map={"OLD": "NEW"}).match([old], [new])
-        self.assertEqual(len(matches), 1)
-        self.assertIn("Receivers matched", matches[0].reasons)
-        event_score = SignalRenameDetector(is_event_like=True, ecu_map={"OLD": "NEW"}).score(old, new)[0]
-        plain_score = SignalRenameDetector(is_event_like=True).score(old, new)[0]
-        self.assertAlmostEqual(event_score - plain_score, 0.06)
+        plain = signal_evidence(old, new, {}, RECALL_V1)
+        mapped = signal_evidence(old, new, {"OLD": "NEW"}, RECALL_V1)
+        self.assertIsNotNone(plain)  # Equal layout is sufficient evidence regardless of receivers.
+        self.assertIsNotNone(mapped)
+        self.assertGreater(mapped.similarity, plain.similarity)
+
 
     def test_database_pairing_scoring_honors_mapping(self):
         old = DatabaseCandidate("alpha.dbc", _database("OLD", ()))
         new = DatabaseCandidate("beta.dbc", _database("NEW", ()))
         plain = match_renamed_databases([old], [new])[0]
         mapped = match_renamed_databases([old], [new], {"OLD": "NEW"})[0]
-        self.assertGreater(mapped.confidence, plain.confidence)
-        self.assertIn("Common CAN ID structures 100% matched", mapped.reasons)
-        self.assertIn("Transmitter matched", MessageRenameDetector(ecu_map={"OLD": "NEW"}).score(
-            old.database.messages["Status"], new.database.messages["Status"],
-        )[1])
+        self.assertEqual(mapped.pairing.similarity, plain.pairing.similarity)
+        self.assertIn("Message structure overlap 100%", mapped.reasons)
+        a, b = old.database.messages["Status"], new.database.messages["Status"]
+        self.assertGreater(message_evidence(a, b, {"OLD": "NEW"}, RECALL_V1).similarity,
+                           message_evidence(a, b, {}, RECALL_V1).similarity)
+
 
 
 class TestEcuDiscoveryAndFolderMappings(unittest.TestCase):
