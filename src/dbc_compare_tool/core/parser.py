@@ -35,10 +35,14 @@ def parse_dbc(path: Path) -> DbcDatabase:
         nodes=tuple(sorted(node.name for node in getattr(cantools_db, "nodes", []) or [])),
     )
     for cantools_message in getattr(cantools_db, "messages", []):
-        message = _map_message(cantools_message)
+        try:
+            message = _map_message(cantools_message)
+        except DbcParseError as exc:
+            raise DbcParseError(f"{exc} in DBC file: {path}") from exc
         if message.name in database.messages:
             raise DbcParseError(f"Duplicate message name '{message.name}' in DBC file: {path}")
         database.messages[message.name] = message
+    validate_database(database)
     return database
 
 
@@ -88,8 +92,29 @@ def _map_message(cantools_message: Any) -> Message:
     )
     for cantools_signal in cantools_message.signals:
         signal = _map_signal(cantools_signal)
+        if signal.name in message.signals:
+            raise DbcParseError(f"Duplicate signal name '{signal.name}' in message '{message.name}'")
         message.signals[signal.name] = signal
     return message
+
+
+def validate_database(database: DbcDatabase) -> None:
+    """Validate API inventories as well as parsed files before building indexes."""
+    names: set[str] = set()
+    frames: set[tuple[int, bool]] = set()
+    for key, message in database.messages.items():
+        if message.name in names or key != message.name:
+            raise DbcParseError(f"Duplicate or inconsistent message name '{message.name}' in {database.path}")
+        names.add(message.name)
+        frame = message.can_id, message.is_extended_frame
+        if frame in frames:
+            raise DbcParseError(f"Duplicate frame key 0x{message.can_id:X} (extended={message.is_extended_frame}) in {database.path}")
+        frames.add(frame)
+        signals: set[str] = set()
+        for signal_key, signal in message.signals.items():
+            if signal.name in signals or signal_key != signal.name:
+                raise DbcParseError(f"Duplicate or inconsistent signal name '{signal.name}' in {database.path}, message '{message.name}'")
+            signals.add(signal.name)
 
 
 def _map_signal(cantools_signal: Any) -> Signal:
