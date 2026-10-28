@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from dbc_compare_tool.core.parser import parse_dbc
+from dbc_compare_tool.core.parser import DbcParseError, parse_dbc, validate_database
 
 _EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 _OLD_BUS_A = _EXAMPLES / "old" / "Bus_A.dbc"
@@ -106,6 +106,33 @@ class TestByteOrderAndValueType(unittest.TestCase):
         self.assertFalse(self.signals["IntelSignal"].is_signed)
         self.assertEqual(self.signals["SignedSignal"].value_type, "signed")
         self.assertTrue(self.signals["SignedSignal"].is_signed)
+
+
+class TestInventoryValidation(unittest.TestCase):
+    def test_repeated_signal_and_frame_are_rejected_with_file_context(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "duplicate.dbc"
+            for line in (' SG_ IntelSignal : 56|8@1+ (1,0) [0|255] "" ECM\n',
+                         'BO_ 100 Another: 8 ECU\n'):
+                path.write_text(_MIXED_ENDIAN_DBC + line, encoding="utf-8")
+                with self.subTest(line=line), self.assertRaises(DbcParseError) as error:
+                    parse_dbc(path)
+                self.assertIn(str(path), str(error.exception))
+
+    def test_api_inventory_cannot_hide_repeated_signal_or_frame_with_alias_keys(self):
+        from dataclasses import replace
+
+        for kind in ("message", "signal", "frame"):
+            db = parse_dbc(_OLD_BUS_A)
+            msg = next(iter(db.messages.values()))
+            if kind == "message":
+                db.messages["Alias"] = msg
+            elif kind == "signal":
+                msg.signals["Alias"] = next(iter(msg.signals.values()))
+            else:
+                db.messages["Another"] = replace(msg, name="Another")
+            with self.subTest(kind=kind), self.assertRaises(DbcParseError):
+                validate_database(db)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dbc-compare-tool"
-version = "0.6.7"
+version = "0.7.0"
 description = "Compare CAN DBC files or baseline folders and generate an engineering-grade Excel change report"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -27,8 +27,10 @@ classifiers = [
 dependencies = [
     "cantools>=40.3.0",
     "openpyxl>=3.1.0",
-    "PySide6>=6.7.0",
 ]
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.7.0"]
 
 [project.urls]
 Homepage = "https://github.com/longvo92/dbc-compare-tool"

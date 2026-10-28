@@ -280,11 +280,11 @@ class ImpactReportTests(unittest.TestCase):
             (folder / "bus.dbc").write_text(_DBC, encoding="utf-8")
             (folder / "bad.dbc").write_text("invalid dbc {{{", encoding="utf-8")
         output = self.root / "full.xlsx"
-        self.assertEqual(main(["--old", str(old), "--new", str(new), "--out", str(output), "--include-unchanged"]), 0)
+        self.assertEqual(main(["--old", str(old), "--new", str(new), "--out", str(output), "--include-unchanged"]), 3)
         workbook = load_workbook(output)
         self.addCleanup(workbook.close)
         summary = dict(workbook["Summary"].iter_rows(min_row=4, values_only=True))
         self.assertEqual(summary["Report Mode"], "Include Unchanged")
         self.assertEqual(summary["Total Changes"], 0)
-        self.assertEqual(summary["Parse Errors (skipped DBCs)"], 1)
+        self.assertEqual(summary["Parse Errors (skipped DBCs)"], 2)
         self.assertEqual(workbook["Signal Details"].max_row, 3)

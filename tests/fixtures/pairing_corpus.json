@@ -1,0 +1,11 @@
+[
+  {"name": "bulk-prefix", "messages": 3, "signals": 8, "prefix_old": "VCU", "prefix_new": "IVC"},
+  {"name": "shifted-prefix", "messages": 3, "signals": 8, "prefix_old": "VCU", "prefix_new": "IVC", "shift": 1},
+  {"name": "file-and-frame-rename", "messages": 3, "signals": 6, "old_path": "alpha.dbc", "new_path": "zeta.dbc", "frame_shift": 1000},
+  {"name": "all-identities-renamed", "messages": 3, "signals": 6, "old_path": "alpha.dbc", "new_path": "zeta.dbc", "prefix_old": "AAA", "prefix_new": "ZZZ", "frame_shift": 1000},
+  {"name": "ecu-rename", "messages": 3, "signals": 6, "prefix_old": "VCU", "prefix_new": "IVC", "ecu_old": "OLD", "ecu_new": "NEW", "ecu_map": {"OLD": "NEW"}},
+  {"name": "multiplexed-prefix", "messages": 2, "signals": 6, "prefix_old": "VCU", "prefix_new": "IVC", "multiplexed": true},
+  {"name": "multiplexed-all-identities", "messages": 2, "signals": 6, "old_path": "alpha.dbc", "new_path": "zeta.dbc", "prefix_old": "AAA", "prefix_new": "ZZZ", "frame_shift": 1000, "multiplexed": true, "rename_mux": true},
+  {"name": "ambiguous-layout", "messages": 1, "signals": 6, "prefix_old": "AAA", "prefix_new": "ZZZ", "ambiguous": true},
+  {"name": "unrelated", "messages": 1, "signals": 2, "old_path": "alpha.dbc", "new_path": "zeta.dbc", "prefix_old": "AAA", "prefix_new": "ZZZ", "frame_shift": 1000, "unrelated": true}
+]

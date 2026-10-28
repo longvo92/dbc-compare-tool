@@ -49,10 +49,10 @@ def validate_ecu_map(
     duplicates = sorted(node for node, count in Counter(renamed_targets).items() if count > 1)
     if duplicates:
         raise ValueError(f"NEW ECU nodes paired more than once: {', '.join(duplicates)}")
-    if old_nodes is None or new_nodes is None:
+    if old_nodes is None and new_nodes is None:
         return
-    missing_old = sorted(set(ecu_map) - old_nodes)
-    missing_new = sorted(set(ecu_map.values()) - new_nodes)
+    missing_old = sorted(set(ecu_map) - old_nodes) if old_nodes is not None else []
+    missing_new = sorted(set(ecu_map.values()) - new_nodes) if new_nodes is not None else []
     if missing_old or missing_new:
         details = []
         if missing_old:

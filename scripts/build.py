@@ -56,7 +56,7 @@ def check_build_env(python: str) -> None:
             f"{probe.stderr.strip()}\n"
             "Fix: create the project venv and install deps:\n"
             "    python -m venv .venv\n"
-            "    .venv\\Scripts\\pip install -e . pyinstaller",
+            '    .venv\\Scripts\\pip install -e ".[gui]" pyinstaller',
             file=sys.stderr,
         )
         raise SystemExit(1)

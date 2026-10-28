@@ -87,7 +87,7 @@ class TestMessageIdentityChanges(unittest.TestCase):
                     self.assertEqual([c.change_type for c in result.signal_changes],
                                      ["Unchanged", "Unchanged"] if full else [])
 
-    def test_same_name_pair_is_reserved_before_structural_rename_candidates(self):
+    def test_name_evidence_outscores_similar_structural_candidate(self):
         old = _OLD_DBC.split('BA_ "GenMsgCycleTime"')[0]
         replacement = old.replace("BO_ 100 ", "BO_ 400 ").replace("WheelSpeeds", "OtherSpeeds")
         same_name = old.replace("BO_ 100 WheelSpeeds: 8 ABS", "BO_ 500 WheelSpeeds: 4 ABS")
@@ -98,7 +98,7 @@ class TestMessageIdentityChanges(unittest.TestCase):
         modified = next(c for c in result.message_changes if c.change_type == "Modified")
         self.assertEqual(modified.new_message.can_id, 500)
 
-    def test_frame_key_still_takes_priority_over_name(self):
+    def test_frame_and_content_evidence_outscore_name_in_this_fixture(self):
         old = _OLD_DBC.split('BA_ "GenMsgCycleTime"')[0]
         renamed = old.replace("WheelSpeeds", "OtherSpeeds")
         moved = old.replace("BO_ 100 ", "BO_ 400 ")

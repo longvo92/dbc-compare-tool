@@ -9,12 +9,19 @@ ship.
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import PropertyMock, patch
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.worksheet.worksheet import Worksheet
 
 from dbc_compare_tool.core.comparator import DbcComparator, filter_result
-from dbc_compare_tool.core.models import ComparisonResult, FilePairSummary
-from dbc_compare_tool.report.excel import default_report_path, write_excel_report
+from dbc_compare_tool.core.models import Change, ComparisonResult, FilePairSummary
+from dbc_compare_tool.report.excel import (
+    ReportExportError,
+    _write_signal_details,
+    default_report_path,
+    write_excel_report,
+)
 
 _EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 _OLD_FOLDER = _EXAMPLES / "old"
@@ -39,10 +46,10 @@ class BaselineReportTests(unittest.TestCase):
         self.workbook = load_workbook(self.output)
         self.addCleanup(self.workbook.close)
 
-    def test_workbook_has_the_four_documented_sheets_in_order(self):
+    def test_workbook_includes_pairing_review_after_existing_sheets(self):
         self.assertEqual(
             self.workbook.sheetnames,
-            ["Summary", "DBC Overview", "Message Details", "Signal Details"],
+            ["Summary", "DBC Overview", "Message Details", "Signal Details", "Pairing Review"],
         )
 
     def test_summary_total_matches_the_result(self):
@@ -74,6 +81,7 @@ class BaselineReportTests(unittest.TestCase):
         context = {"CAN ID", "ECU Node Tx", "ECU Node Rx"}
         shared = {
             "DBC File", "Change Type", "Confidence Score", "Confidence Level", "Match Reason", "Changed Properties",
+            "Pair ID", "Review Required",
         } | context
         expected = {
             "Message Details": shared | {"Old Message Name", "New Message Name"},
@@ -211,11 +219,66 @@ class ReportInputModeTests(unittest.TestCase):
                     output = write_excel_report(filter_result(result, {"Modified"}), root / "folders.xlsx")
                     workbook = load_workbook(output)
                     try:
-                        self.assertEqual(workbook.sheetnames,
+                        self.assertEqual(workbook.sheetnames[:4],
                                          ["Summary", "DBC Overview", "Message Details", "Signal Details"])
                         self.assertEqual(workbook["DBC Overview"].max_row, 2)
                     finally:
                         workbook.close()
+
+
+class ReportRowLimitTests(unittest.TestCase):
+    @staticmethod
+    def signal_changes(count):
+        return [
+            Change("bus.dbc", "Added", "", f"Signal{i}", None, "Entity added")
+            for i in range(count)
+        ]
+
+    def test_bulk_rows_do_not_scan_existing_worksheet_dimensions(self):
+        workbook = Workbook()
+        self.addCleanup(workbook.close)
+        with patch.object(
+            Worksheet, "max_row", new_callable=PropertyMock,
+            side_effect=AssertionError("Bulk row insertion must not scan existing cells"),
+        ):
+            _write_signal_details(workbook.active, self.signal_changes(1000))
+        self.assertEqual(workbook.active.max_row, 1001)
+        self.assertEqual(workbook.active.cell(1001, 6).value, "Signal999")
+
+    def test_detail_row_limit_includes_header_and_preserves_existing_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "report.xlsx"
+            result = ComparisonResult(signal_changes=self.signal_changes(63))
+            with patch("dbc_compare_tool.report.excel.EXCEL_MAX_ROWS", 64):
+                write_excel_report(result, output)
+                workbook = load_workbook(output)
+                try:
+                    self.assertEqual(workbook["Signal Details"].max_row, 64)
+                finally:
+                    workbook.close()
+                original = output.read_bytes()
+                result.signal_changes.extend(self.signal_changes(1))
+                with self.assertRaisesRegex(ReportExportError, "row limit"):
+                    write_excel_report(result, output)
+            self.assertEqual(output.read_bytes(), original)
+
+    def test_summary_row_limit_is_checked_before_saving(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "report.xlsx"
+            result = ComparisonResult()
+            write_excel_report(result, output)
+            workbook = load_workbook(output)
+            try:
+                summary_rows = workbook["Summary"].max_row
+            finally:
+                workbook.close()
+            with patch("dbc_compare_tool.report.excel.EXCEL_MAX_ROWS", summary_rows):
+                write_excel_report(result, output)
+            original = output.read_bytes()
+            with patch("dbc_compare_tool.report.excel.EXCEL_MAX_ROWS", summary_rows - 1):
+                with self.assertRaisesRegex(ReportExportError, "row limit"):
+                    write_excel_report(result, output)
+            self.assertEqual(output.read_bytes(), original)
 
 
 class DefaultReportPathTests(unittest.TestCase):

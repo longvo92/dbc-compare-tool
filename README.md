@@ -19,7 +19,7 @@ Compare two CAN DBC files or baseline folders and export changes to Excel. Detec
 | Feature | Use it to |
 |---|---|
 | File or folder comparison | Compare individual DBCs or complete baselines |
-| Rename detection | Find renamed messages and signals with confidence indicators |
+| Recall-first pairing | Match DBCs, messages and signals; flag weak or competing pairs for review |
 | ECU pairing | Map renamed nodes and review routing changes |
 | Excel reports | Filter changes and inspect OLD/NEW property values |
 
@@ -37,19 +37,21 @@ See the [User Guide](resources/help/user_guide.md) for pairing, CLI and Excel ba
 
 | Sheet | Use it to |
 |---|---|
-| Summary | Check change counts and selected ECU mappings |
+| Summary | Check Complete/Incomplete status, policy, inventory coverage and review counts |
 | DBC Overview (folder mode only) | Review file pairs, paths and parse errors |
 | Message Details | Review message changes and ECU routing |
-| Signal Details | Review signal changes and rename confidence |
+| Signal Details | Review signal changes and heuristic confidence |
+| Pairing Review (when needed) | Inspect weak pairs, all competing candidates and possible parent moves |
 
 Use Excel column filters to find a change type, CAN ID or ECU.
+Use **Pair ID** to trace a pair into **Pairing Review**, and filter **Review Required** for uncertain results.
 Read **Changed Properties** in each detail sheet for compact deltas, such as `Start Bit: 56->57; Length: 8->16`.
 Message and signal names, including parent message names, use separate OLD/NEW columns. Other fields show unchanged values once (`EVCC`) and changes as `EVCC->EVCC2`. Added/removed entries show only the existing value, without an arrow.
 
 ## Requirements
 
 - Windows for the packaged desktop app.
-- Python 3.9+ for source use; installation includes `cantools`, `openpyxl` and `PySide6`.
+- Python 3.9+ for source use; core installation includes `cantools` and `openpyxl`. The GUI requires the `gui` extra (`PySide6`).
 
 ## Install from source
 
@@ -57,7 +59,7 @@ Message and signal names, including parent message names, use separate OLD/NEW c
 git clone https://github.com/longvo92/dbc-compare-tool.git
 cd dbc-compare-tool
 py -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m pip install -e ".[gui]"
 ```
 
 ## Usage
@@ -75,10 +77,13 @@ From the repository folder, start the GUI with `.\run_gui.bat`, or run the CLI:
 
 ## Review the results
 
-- Signal pairing favors finding renames, including small name/start-bit changes. Review **Medium/Low** confidence and **Match Reason**; confidence is a heuristic, not a probability.
-- In folder mode, unreadable files are skipped and marked **Parse Error**. Check **DBC Overview** for missing inputs. A direct file parse error stops the run.
-- Message names must be unique within each DBC. Duplicate names are parse errors. A message that keeps its name but changes CAN ID or frame format is **Modified** when it was not already paired by frame key.
-- **Unchanged** describes an item's own properties. Its parent message or contained signals may still have changes.
+- The shared `recall-v1` policy maximizes eligible pair count, then similarity. Same path, CAN ID and name are evidence rather than fixed matches; only direct-file selection and manual DBC mapping force a pair.
+- Weak pairs remain visible. Review **Review Required**, confidence and **Pairing Review**; confidence is a heuristic, not a probability. Parent uncertainty limits child confidence.
+- Folder parse errors produce an **Incomplete** report with OLD/NEW paths and causes. Unreadable counts are **Unknown**; a valid file whose fixed manual counterpart failed is **Not compared**. Direct-file parse errors stop export.
+- Message names and frame keys must be unique per DBC; signal names must be unique per message. Duplicate entities are rejected, including in the database API.
+- Saved manual mappings are respected, including **Removed** rows. Possible message/signal moves appear only as suggestions and leave the main Added/Removed results unchanged.
+- CLI exit codes: `0` complete, `1` parse/processing/export failure, `2` invalid input/mapping, **`3` report exported but incomplete**. Update scripts that previously treated partial reports as success.
+- **Unchanged** describes an item's own properties. Its parent or children may still change. Synthetic regression results do not establish production matching accuracy.
 
 ## Documentation
 
