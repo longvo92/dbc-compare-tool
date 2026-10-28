@@ -79,7 +79,7 @@ jobs:
       - name: Install the project and the build tool
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e .
+          python -m pip install -e ".[gui]"
           python -m pip install pyinstaller
 
       # main is already green, but a release is the one build where "the tests

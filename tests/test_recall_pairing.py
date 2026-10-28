@@ -75,6 +75,32 @@ class EvidenceTests(unittest.TestCase):
             message_profile(message(signals=[signal("A")])).structure,
         )
 
+    def test_multiplex_topology_survives_parent_rename_and_distinguishes_branches(self):
+        mux_a = signal("MuxA", 0, is_multiplexer=True)
+        mux_b = signal("MuxB", 16, is_multiplexer=True)
+        child = signal("Value", 32, multiplexer_signal="MuxA", multiplexer_ids=(1,))
+        old = message(signals=[mux_a, mux_b, child])
+        renamed = message(
+            signals=[
+                replace(mux_a, name="NewMuxA"),
+                mux_b,
+                replace(child, multiplexer_signal="NewMuxA"),
+            ]
+        )
+        moved = message(
+            signals=[mux_a, mux_b, replace(child, multiplexer_signal="MuxB")]
+        )
+        self.assertEqual(
+            message_profile(old).structure, message_profile(renamed).structure
+        )
+        self.assertEqual(message_profile(old).layouts, message_profile(renamed).layouts)
+        self.assertNotEqual(
+            message_profile(old).structure, message_profile(moved).structure
+        )
+        self.assertNotEqual(
+            message_profile(old).layouts, message_profile(moved).layouts
+        )
+
     def test_unrelated_signals_and_messages_stay_unmatched(self):
         a = signal("aaa", 0)
         b = signal(
@@ -447,6 +473,36 @@ class InputAndReportTests(unittest.TestCase):
         )
         self.assertFalse(excluded.move_suggestions)
         self.assertTrue(a.exists() and d.exists())
+
+    def test_move_suggestion_confidence_respects_inferred_ancestors(self):
+        moved = ' SG_ Moved : 0|8@1+ (1,0) [0|255] "move" ECU\n'
+        anchor_a = ' SG_ AnchorA : 32|3@1+ (7,0) [0|7] "A" ECU\n'
+        anchor_b = ' SG_ AnchorB : 16|5@1+ (9,0) [0|31] "B" ECU\n'
+        header = 'VERSION ""\nBU_: ECU\n'
+        (self.old / "alpha.dbc").write_text(
+            header
+            + "BO_ 1 A: 8 ECU\n"
+            + moved
+            + anchor_a
+            + "BO_ 2 B: 8 ECU\n"
+            + anchor_b,
+            encoding="utf-8",
+        )
+        (self.new / "zeta.dbc").write_text(
+            header
+            + "BO_ 1 A: 8 ECU\n"
+            + anchor_a
+            + "BO_ 2 B: 8 ECU\n"
+            + anchor_b
+            + moved,
+            encoding="utf-8",
+        )
+        result = DbcComparator().compare_folders(self.old, self.new)
+        (suggestion,) = [p for p in result.move_suggestions if p.old.kind == "signal"]
+        self.assertLessEqual(
+            suggestion.confidence, result.file_pairs[0].pairing.confidence
+        )
+        self.assertTrue(suggestion.requires_review)
 
     def test_review_exports_every_candidate_and_pair_ids_survive_filtering(self):
         old = database("old", [message(signals=[signal("A"), signal("B")])])

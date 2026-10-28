@@ -680,6 +680,7 @@ class DbcComparator:
                 else (change.old_message or change.new_message)
             )
         paired_parents = {}
+        parent_confidence = {}
         for pair in result.pairings:
             if pair.old and pair.new and pair.old.kind in {"dbc", "message"}:
                 parent_old = (
@@ -703,6 +704,13 @@ class DbcComparator:
                     )
                 )
                 paired_parents[pair.old.kind, parent_old] = parent_new
+                if not pair.fixed and pair.confidence is not None:
+                    parent_confidence["OLD", pair.old.kind, parent_old] = (
+                        pair.confidence
+                    )
+                    parent_confidence["NEW", pair.new.kind, parent_new] = (
+                        pair.confidence
+                    )
         for kind in ("message", "signal"):
             old = sorted(e for e in objects if e.side == "OLD" and e.kind == kind)
             new = sorted(e for e in objects if e.side == "NEW" and e.kind == kind)
@@ -718,15 +726,31 @@ class DbcComparator:
                         message_evidence if kind == "message" else signal_evidence
                     )(objects[a], objects[b], self.ecu_map, self.policy)
                     if evidence is not None:
+                        confidence = min(
+                            self.policy.ambiguous_cap,
+                            evidence.similarity * self.policy.heuristic_cap,
+                        )
+                        for entity in (a, b):
+                            confidence = min(
+                                confidence,
+                                parent_confidence.get(
+                                    (entity.side, "dbc", (entity.dbc_path,)), confidence
+                                ),
+                            )
+                            if kind == "signal":
+                                confidence = min(
+                                    confidence,
+                                    parent_confidence.get(
+                                        (entity.side, "message", entity.parent),
+                                        confidence,
+                                    ),
+                                )
                         result.move_suggestions.append(
                             PairingMetadata(
                                 a,
                                 b,
                                 evidence.similarity,
-                                min(
-                                    self.policy.ambiguous_cap,
-                                    evidence.similarity * self.policy.heuristic_cap,
-                                ),
+                                confidence,
                                 evidence.reasons
                                 + ("Possible parent move; main comparison unchanged",),
                                 requires_review=True,

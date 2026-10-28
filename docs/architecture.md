@@ -1,96 +1,99 @@
 # Architecture
 
-The CLI and PySide6 GUI share a comparison engine and Excel writer. `core/` and `report/` run without Qt. Python 3.9+ is required.
+The CLI and PySide6 GUI share a Qt-independent core and Excel writer. Python 3.9+ remains supported. Core dependencies are cantools/openpyxl; install `.[gui]` for the optional PySide6 UI. No solver dependency is required.
 
 ## Components
 
-Paths below are relative to `src/dbc_compare_tool/`.
+Paths are relative to `src/dbc_compare_tool/`.
 
 | Module | Responsibility |
 |---|---|
-| `core/models.py` | Databases, messages, signals and comparison results |
-| `core/parser.py` | Read DBCs with cantools; extract layout, routing, multiplexing, values and comments |
-| `core/discovery.py`, `core/pairing.py` | Find files and select one-to-one DBC pairs |
-| `core/ecu.py` | Discover ECU nodes and validate identity mappings |
-| `core/comparator.py` | Compare file pairs and filter results |
-| `core/rename.py` | Detect message and signal renames |
-| `report/excel.py`, `report/_style.py` | Write and format the Excel workbook |
-| `ui/main_window.py`, `ui/widgets.py` | GUI, pairing dialogs, workers and path settings |
-| `cli.py` | Command-line arguments, comparison and export |
+| `core/models.py` | Input entities, full identities, pairing metadata, inventory, diagnostics and results |
+| `core/parser.py` | Parse DBCs; reject duplicate names/frame keys before dictionary loss; validate API inventories |
+| `core/discovery.py` | Discover case-insensitive `.dbc` extensions with relative paths |
+| `core/policy.py` | Versioned `recall-v1` eligibility, profiles, scoring weights and confidence constants |
+| `core/assignment.py` | Component decomposition and rectangular Hungarian assignment |
+| `core/matching.py`, `core/pairing.py` | Shared entity matching/confidence and DBC candidate convenience API |
+| `core/ecu.py` | Node discovery, mapping validation and routing equivalence |
+| `core/comparator.py` | Hierarchical comparison, inventory accounting, moves and filtering |
+| `report/excel.py`, `report/_style.py` | Shared atomic Excel export and formatting |
+| `ui/main_window.py`, `ui/widgets.py` | Inputs, workers, DBC/ECU mapping dialogs and settings |
+| `cli.py` | Arguments, status codes and export |
 
-## Data Flow
+## Pipeline and contracts
 
-1. Validate two folders or two `.dbc` files and any ECU mapping.
-2. Parse the selected files, or discover and pair files from both folders.
-3. Match messages, compare their signals and collect property changes.
-4. Apply report filters and write the workbook.
+Parse/validate inventory → apply manual mapping → generate eligible edges → assign → assess confidence → compare properties → suggest parent moves → verify inventory → filter details → export.
 
-Added or removed DBCs are compared against an empty database so their messages and signals appear in the detail sheets. Folder parse errors are recorded per file; other files continue. Direct file parse errors stop the run. ECU discovery skips unreadable files in folder mode.
+`compare_paths`, `compare_files`, `compare_folders`, `compare_manual` and `compare_databases` remain available. `DbcComparator(..., *, policy="recall-v1")` accepts the policy version or an internal `MatchingPolicy` object. There is one engine and no legacy mode.
 
-Duplicate message names are parse errors because the database model requires unique message names.
+Identity consists of side, full relative DBC path (absolute selected path in direct-file mode), entity kind, frame ID/extended flag, message name and signal name. Basenames are display labels only. Pair IDs are assigned in identity order and preserved by filtering; they identify one pair throughout a report rather than a globally permanent record.
 
-## Comparison Contracts
+Direct-file selection and manual DBC targets are fixed constraints. For `compare_manual`, `None` and omitted OLD paths mean Removed; unreferenced NEW paths mean Added. GUI saved mappings apply even with Removed rows. Input changes invalidate saved maps. ECU mappings apply before evidence and property comparison while original routing values remain available for reports.
 
-- `compare_paths` accepts matching input types. `compare_files` treats the two selected files as one explicit pair.
-- `compare_manual` accepts a DBC pairing map. The GUI uses saved manual pairs only when every OLD file is paired; otherwise it uses automatic pairing.
-- A message's frame key is `(can_id, is_extended_frame)`, keeping standard and extended frames distinct.
-- Signals are matched within their paired parent messages.
-- ECU mappings reference existing nodes; selected renames must have distinct targets. Unselected nodes keep their names, even when a rename uses that name as its target. Original names remain in report data.
-- `include_unchanged=True` retains unchanged entries and bypasses change-type filters. `Total Changes` excludes unchanged entries.
-- `filter_result` preserves file pairs and ECU mappings.
+Names must be unique per DBC/message; frame keys `(can_id, is_extended_frame)` must be unique per DBC. Parsed lists are checked before conversion to dictionaries. API mappings are checked for duplicate values/names and inconsistent keys; entities lost before reaching the API cannot be reconstructed.
 
-## Matching Rules
+Direct-file parse failure aborts. Folder failures record side/path/reason and produce Incomplete. A valid peer of a failed fixed pair is Not compared. Automatic same-path candidates are not fixed: valid unmatched files stay in the inventory and can be paired elsewhere or reported Added/Removed. Every valid entity must appear exactly once in the pairing ledger as paired, unmatched or not compared; the invariant runs before filtering. Unknown unreadable inventory is never assumed zero. ECU node-existence checks are deferred only on unreadable sides; known-side mapping validation remains active.
 
-| Item | Matching order | Fallback threshold |
-|---|---|---|
-| DBC files | Equal relative path, then global keyword/content assignment | 0.55 |
-| Messages | Equal frame key, equal name among unmatched messages, then structural similarity | 0.60 |
-| Signals | Exact name, unique complete-property match, then similarity | 0.65; 0.55 for event-like messages |
+## Recall-v1 matching
 
-A renamed message with the same frame key has confidence 1.0. Unique complete-property signal matches are reserved with confidence 1.0, unless a nearby shifted candidate has stronger evidence. ECU mappings apply to receivers before matching. Start-bit shifts up to 8 bits receive partial position credit.
+Eligibility is the OR of the following evidence, independent of ranking:
 
-An unmatched message that keeps its name is Modified when its CAN ID or frame format changes. Signals are compared within that pair.
+| Level | Minimum evidence |
+|---|---|
+| DBC | Equal relative path; meaningful shared path/filename keyword; or ≥0.50 overlap in frame keys, message names, signal names or message structures |
+| Message | Equal frame key/name; ≥0.50 signal-name/layout overlap; or name similarity ≥0.45 with equal DLC or transmitter |
+| Signal | Equal name/layout; equal properties except name/start; name similarity ≥0.45 with equal length/byte order; or position shift ≤8 with equal encoding, scaling/range and unit |
 
-Remaining signals use global one-to-one assignment: maximize eligible pair count, then total similarity. Complete-property matches remain eligible even with weak name similarity. Message fallback matching remains greedy.
+Names use casefolded `SequenceMatcher(autojunk=False)`. Overlap is intersection divided by the smaller inventory; empty collections supply no evidence. Layout/structure Counters preserve multiplicity and multiplex branches, resolving parent layouts recursively so renamed multiplexers retain their topology. Empty messages supply no structural evidence. Message structure ignores names, CAN ID and cycle time. Keyword version/date removal uses fixed path strengths, with no inventory-wide frequency weights.
 
-Confidence is a review score: **High** ≥ 0.90, **Medium** ≥ 0.70, otherwise **Low**. Signal fallback confidence is `0.89 × similarity`, reduced further when alternatives have similar or better scores. Signal scores are rounded to two decimals before assigning levels. Ambiguity lowers confidence without discarding the selected signal pair.
+Every eligible edge is retained: no confidence cutoff or top-K. Sort full identities, quantize similarity to 1e-6, split the bipartite graph into independent connected components, then use Hungarian assignment with integer pair bonuses. Each extra pair outweighs every possible similarity improvement; total similarity is the second objective and stable traversal breaks ties. Use the smaller component axis as rows and add dummy unmatched columns. Same path/frame/name and complete-property matches are never reserved in advance.
 
-DBC pairing can match files through shared keywords even when their contents differ. Pairing reasons are recorded in DBC Overview.
+| Level | Similarity group weights |
+|---|---|
+| DBC | Path/keyword 20, frames 20, message names 20, signal names 20, structure 20 |
+| Message | Frame 10, name 20, signal names 25, layout 30, DLC 5, transmitter 5, cycle 5 |
+| Signal | Name 25, layout 25, encoding 15, scaling/range 15, unit 5, receivers 5, multiplexing 10 |
 
-Scoring constants and formulas are defined in [pairing.py](../src/dbc_compare_tool/core/pairing.py) and [rename.py](../src/dbc_compare_tool/core/rename.py).
+Unavailable scalar/collection metadata drops its weight; remaining groups renormalize. Scalars compare by value; groups average their available fields. Signal layout averages position/length/byte order; position uses `1 / (1 + distance / 16)` with continuous decay after 8 bits. Encoding averages length/order/type/sign. Profiles are built once per inventory and name similarity has a bounded cache. Candidate metadata is O(edges); rival references are retained on selected pairs to avoid cubic duplication. Dense components still require quadratic candidate storage and cubic Hungarian work; coverage is never reduced for speed.
 
-## Report
+Confidence is heuristic: High ≥0.90, Medium ≥0.70, otherwise Low. Start at `0.99 × similarity`; only a complete-property edge with no eligible rival gets 1.0. A rival within 0.05 or better applies a margin penalty and caps confidence at 0.89. A nonfixed parent's confidence caps children; its review requirement also caps them below High. Confidence is floored to two decimals before classification. Event-like signals use the same policy as other signals.
 
-The workbook contains `Summary`, `Message Details` and `Signal Details`. Folder comparisons also include `DBC Overview` after Summary, even when only one file pair exists. `ComparisonResult.is_file_comparison` records explicit file mode and survives change-type filtering so CLI and GUI use the same sheet selection.
+`PairingMetadata` retains identities, similarity, confidence, evidence, selected/fixed state, review requirement and competitors. `Change` and file summaries reference it directly; report reasons are never parsed from descriptions. Selected pairs include unchanged entities even when no change row is emitted.
 
-Detail sheets contain identity, CAN IDs, ECU Tx/Rx, match confidence/reasons and one `Changed Properties` column. Each property delta uses `Property: old->new`; multiple deltas share the same cell, separated by `; `. Empty delta lists produce blank cells. Numeric deltas preserve floating-point precision. Summary records report mode, ECU mappings and skipped parse errors. DBC Overview uses one full `Path` column for OLD/NEW paths; detail display labels use basenames.
+Move suggestions evaluate all eligible unmatched message pairs across different DBC parents and signal pairs across different message parents. Corresponding paired parents are excluded, as are manual exclusions and not-compared inventories. Suggestions do not alter assignment, coverage, Added/Removed or totals. Split/merge is unsupported.
 
-The writer keeps entity names and parent message names in separate OLD/NEW columns. Other fields combine OLD/NEW values: equal values appear once; changes use `old->new`, retaining empty sides for modified properties. Added/Removed entries show only the existing side without an arrow, including zero inventory counts for added or removed DBCs. Comparison results retain separate OLD/NEW data.
+## Reports and entry points
 
-## GUI and Entry Points
+The workbook keeps Summary, Message Details and Signal Details; folders add DBC Overview. Pairing Review appears for selected review pairs, every eligible competitor and move suggestions. It records full identities/paths/parents, scores, selected status and evidence. Excel row/text limits fail export explicitly. Export uses a sibling temporary file then replaces the target, preserving an existing workbook on failure. Cell text is written as literal strings.
 
-Comparison, ECU discovery and export use workers. Input changes invalidate saved DBC and ECU pairing. Input type and paths are stored through `QSettings("DbcCompareTool", "DBCCompareTool")`.
+`summary()` only counts detail changes and excludes Unchanged from Total Changes. Completeness, diagnostics, coverage, policy and review count are separate metadata. `filter_result()` changes only detail lists; Include Unchanged bypasses filtering. Suppressed unchanged review pairs still appear in Pairing Review. Incomplete and Unknown are prominent in Summary/DBC Overview.
+
+GUI comparison/discovery/export run in workers and retain existing QSettings behavior. No review-confirmation step precedes export. The completion status includes completeness, file errors and review count.
 
 | Entry point | Target |
 |---|---|
 | `dbc-compare-tool-gui`, `python -m dbc_compare_tool` | `ui.main_window:main` |
 | `dbc-compare-tool`, `python -m dbc_compare_tool.cli` | `cli:main` |
 
-CLI exit codes: `0` completed, `1` parse/write failure, `2` invalid input or mapping. A folder comparison can complete with skipped parse errors.
+CLI: 0 complete export; 1 direct-file parse/processing/export error; 2 invalid input/mapping; 3 exported Incomplete. Existing automation must handle 3 separately from success. Source GUI installations now require the `gui` extra.
 
 ## Verification
 
-After [source installation](../README.md#install-from-source), run from the repository folder:
-
 ```powershell
-.\.venv\Scripts\python.exe -m pip install ruff pyinstaller
+.\.venv\Scripts\python.exe -m pip install -e ".[gui]" ruff pyinstaller
 $env:PYTHONPATH = "src"
+$env:QT_QPA_PLATFORM = "offscreen"
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 .\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe scripts/evaluate_pairing.py --benchmark
 .\.venv\Scripts\python.exe -m dbc_compare_tool.cli --old examples/old --new examples/new --out "$env:TEMP\dbc-smoke.xlsx"
 ```
 
-Tests cover parsing, comparison, pairing, renames, reports, GUI and release checks. GUI tests skip without Qt. CI runs engine tests on Linux/Windows with Python 3.9, 3.10 and 3.12, plus a Windows/Python 3.12 GUI job.
+Retained regressions cover duplicate inventories, missing cycle time, greedy message/exact signal traps, filename plus frame changes, DBC cardinality versus total score, standard/extended IDs, multiplexing, small deltas, ECU mapping, filtering and moves. Small graphs are exhaustively checked against brute-force cardinality/similarity optima. A shared generated fixture runs through API, CLI and GUI workers, then Excel contents are compared including coverage, confidence and diagnostics.
+
+`tests/fixtures/pairing_corpus.json` labels supported rename scenarios; `scripts/evaluate_pairing.py` emits recall/precision/coverage per level and exits nonzero on a failed acceptance condition. Ambiguous cases label pair count/review rather than arbitrary identity truth. `--benchmark` measures a fixed 32-message × 12-signal fixture with perf_counter/tracemalloc. Performance is informational, not a timing gate. There is no labeled production corpus: these results do not demonstrate real-world accuracy.
+
+CI retains Linux/Windows Python 3.9/3.10/3.12 engine jobs and Windows/Python 3.12 GUI verification. Core jobs omit Qt, GUI tests skip if unavailable, and packaged artifacts require startup/export smoke checks.
 
 ## Build and Release
 
@@ -111,7 +114,7 @@ The build copies CHANGELOG.md into resources for the Help menu. Windows packagin
 
 ## Constraints
 
-- Custom `BA_` attributes other than `GenMsgCycleTime` are not compared.
-- Rename detection is heuristic; unmatched items are reported as Removed or Added.
-- Manual pairing applies to DBC files and ECU nodes. Message/signal pairing remains automatic.
-- Duplicate basenames can share a detail-sheet display label; use DBC Overview to identify paths.
+- Custom `BA_` attributes except `GenMsgCycleTime` are not compared.
+- Minimum evidence may admit ambiguous pairs intentionally; review metadata is part of the result.
+- Manual editing applies to DBC files and ECU nodes. Message/signal matching is automatic; possible moves remain separate suggestions.
+- Large dense inventories can produce large review sheets; Excel limits cause an explicit export error.

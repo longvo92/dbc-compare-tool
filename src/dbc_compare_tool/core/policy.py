@@ -104,7 +104,7 @@ def layout(signal: Signal) -> tuple:
         *signal.layout_key(),
         signal.is_multiplexer,
         signal.multiplexer_ids,
-        bool(signal.multiplexer_signal),
+        signal.multiplexer_signal or "",
     )
 
 
@@ -210,6 +210,28 @@ class MessageProfile:
 
 def message_profile(message: Message, ecu_map=None) -> MessageProfile:
     signals = list(message.signals.values())
+
+    def parent_layout(signal: Signal, seen=()) -> tuple:
+        """Retain multiplex topology without depending on multiplexer names."""
+        name = signal.multiplexer_signal
+        if not name:
+            return ()
+        if name in seen:
+            return ("cycle",)
+        parent = message.signals.get(name)
+        if parent is None:
+            return ("unresolved", name)
+        return (
+            "parent",
+            *parent.layout_key(),
+            parent.is_multiplexer,
+            parent.multiplexer_ids,
+            parent_layout(parent, seen + (name,)),
+        )
+
+    def structural_layout(signal: Signal) -> tuple:
+        return (*layout(signal)[:-1], parent_layout(signal))
+
     # Names, CAN ID and cycle time are excluded; multiplex multiplicity survives.
     structure = (
         message.dlc,
@@ -217,7 +239,7 @@ def message_profile(message: Message, ecu_map=None) -> MessageProfile:
             sorted(
                 Counter(
                     (
-                        layout(s),
+                        structural_layout(s),
                         s.value_type,
                         s.is_signed,
                         s.factor,
@@ -231,7 +253,9 @@ def message_profile(message: Message, ecu_map=None) -> MessageProfile:
         ),
     )
     return MessageProfile(
-        frozenset(message.signals), Counter(layout(s) for s in signals), structure
+        frozenset(message.signals),
+        Counter(structural_layout(s) for s in signals),
+        structure,
     )
 
 

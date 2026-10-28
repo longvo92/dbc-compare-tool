@@ -10,6 +10,14 @@ for the procedure.
 
 ## [Unreleased]
 
+### Changed
+
+- Use the shared recall-v1 policy for DBC, message and signal matching: maximize eligible pair count, then similarity; retain weak pairs for review instead of reserving same-path/name/CAN-ID matches early.
+- Report heuristic confidence, parent uncertainty, stable Pair IDs and Review Required; add Pairing Review with every eligible competitor and separate possible parent moves.
+- Mark partial folder reports Incomplete with side/path diagnostics, coverage and Unknown counts. CLI returns 3 after incomplete export; direct-file failures still abort.
+- Reject duplicate message/signal names and frame keys, preserve valid peers of failed fixed mappings as Not compared, and honor GUI manual mappings with Removed rows.
+- Make PySide6 optional for core installations; source GUI users install the `gui` extra (`pip install -e ".[gui]"`).
+
 ## [0.6.7] - 2026-10-26
 
 ### Changed
