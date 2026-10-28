@@ -82,8 +82,8 @@ class ReportExportError(ValueError):
 def _append(sheet, values):
     if any(isinstance(value, str) and len(value) > EXCEL_MAX_CELL_LENGTH for value in values):
         raise ReportExportError(f"Excel cell text limit exceeded in {sheet.title}")
-    if sheet.max_row >= EXCEL_MAX_ROWS:
-        raise ReportExportError(f"Excel row limit exceeded in {sheet.title}")
+    # Bulk row counts are prevalidated; every sheet is checked before saving.
+    # Worksheet.max_row scans existing cells, so querying it here is quadratic.
     sheet.append(values)
 
 
