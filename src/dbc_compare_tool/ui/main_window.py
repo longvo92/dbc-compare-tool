@@ -312,7 +312,9 @@ class ExportWorker(QThread):
         try:
             self.log.emit("Writing Excel report...")
             write_excel_report(self.result, self.output_path)
-            self.completed.emit(self.output_path, self.result.summary())
+            self.completed.emit(self.output_path, dict(self.result.summary(),
+                completeness=self.result.completeness, parse_error_count=len(self.result.diagnostics),
+                review_count=self.result.review_count))
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -680,8 +682,8 @@ class MainWindow(QMainWindow):
         self.run_button.setObjectName("primaryButton")
         self.run_button.setToolTip(
             "Compare two DBC files directly in Files mode. In Folders mode, use saved manual "
-            "pairing when it pairs every old file; otherwise pair files automatically by "
-            "relative path and content similarity. Saved ECU pairing applies in either mode."
+            "mapping, including Removed rows; otherwise use automatic matching. "
+            "Saved ECU pairing applies in either mode."
         )
         self.manual_pair_button.setToolTip(
             "Choose which new-baseline file each old-baseline file is compared against."
@@ -827,8 +829,7 @@ class MainWindow(QMainWindow):
         unpaired = len(self._saved_pair_map) - paired
         if unpaired:
             self._log(
-                f"Manual pairing saved: {paired} pair(s), {unpaired} old file(s) unpaired — "
-                "Run Compare falls back to auto pairing until every old file is paired"
+                f"Manual pairing saved: {paired} pair(s), {unpaired} old file(s) marked Removed"
             )
         else:
             self._log(
@@ -949,21 +950,18 @@ class MainWindow(QMainWindow):
         return types
 
     def _complete_manual_pairing(self) -> dict[str, str | None] | None:
-        """The saved manual pairing, but only when it applies here and pairs
-        every old file. A pairing that still leaves an old file unpaired, or was
-        built for other folders, is ignored so the run falls back to auto."""
+        """Honor saved mappings for these inputs, including explicit Removed rows."""
         pair_map = self._saved_pair_map
         if (
             not self._files_mode()
-            and pair_map
+            and pair_map is not None
             and self._saved_pair_folders == self._current_folder_inputs()
-            and all(new_rel is not None for new_rel in pair_map.values())
         ):
             return pair_map
         return None
 
     def _run_compare(self) -> None:
-        # A complete manual DBC pairing overrides automatic file pairing.
+        # A saved manual DBC mapping overrides automatic file pairing.
         pair_map = self._complete_manual_pairing()
         self._start_compare(pair_map=pair_map)
 
@@ -1067,7 +1065,10 @@ class MainWindow(QMainWindow):
         self._set_actions_enabled(True)
         self.open_button.setEnabled(True)
         self.last_report = report_path
-        self.run_status.setText(f"Report ready · {summary['Total Changes']} changes")
+        status = "Report incomplete" if summary.get("completeness") == "Incomplete" else "Report ready"
+        self.run_status.setText(f"{status} · {summary['Total Changes']} changes · "
+                               f"{summary.get('parse_error_count', 0)} file errors · "
+                               f"{summary.get('review_count', 0)} pairs require review")
         self._log(f"Report generated: {report_path}")
         self._log(f"Total changes: {summary['Total Changes']}")
         self._save_paths()

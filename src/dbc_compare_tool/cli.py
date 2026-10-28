@@ -6,7 +6,7 @@ from pathlib import Path
 
 from dbc_compare_tool.core.comparator import DbcComparator
 from dbc_compare_tool.core.parser import DbcParseError
-from dbc_compare_tool.report.excel import default_report_path, write_excel_report
+from dbc_compare_tool.report.excel import ReportExportError, default_report_path, write_excel_report
 
 
 def _path_from_parts(parts: list[str]) -> Path:
@@ -73,20 +73,26 @@ def main(argv: list[str] | None = None) -> int:
     except (FileNotFoundError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
+    except Exception as exc:
+        print(f"Error: comparison failed: {exc}", file=sys.stderr)
+        return 1
 
     try:
         write_excel_report(result, output_path)
-    except OSError as exc:
+    except (OSError, ReportExportError) as exc:
         print(f"Error: unable to write report {output_path}: {exc}", file=sys.stderr)
         return 1
+    except Exception as exc:
+        print(f"Error: report export failed: {exc}", file=sys.stderr)
+        return 1
 
-    parse_errors = [fp for fp in result.file_pairs if fp.status == "Parse Error"]
-    for fp in parse_errors:
-        print(f"Warning: skipped unparsable DBC: {fp.dbc_file}", file=sys.stderr)
+    for diagnostic in result.diagnostics:
+        print(f"Warning: {diagnostic.side} {diagnostic.path}: {diagnostic.reason}", file=sys.stderr)
 
     print(f"Report written: {output_path}")
     print(f"Total changes: {result.summary()['Total Changes']}")
-    return 0
+    print(f"{result.completeness}; policy {result.policy_version}; {result.review_count} pairs require review")
+    return 3 if result.completeness == "Incomplete" else 0
 
 
 if __name__ == "__main__":

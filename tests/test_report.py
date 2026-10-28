@@ -39,10 +39,10 @@ class BaselineReportTests(unittest.TestCase):
         self.workbook = load_workbook(self.output)
         self.addCleanup(self.workbook.close)
 
-    def test_workbook_has_the_four_documented_sheets_in_order(self):
+    def test_workbook_includes_pairing_review_after_existing_sheets(self):
         self.assertEqual(
             self.workbook.sheetnames,
-            ["Summary", "DBC Overview", "Message Details", "Signal Details"],
+            ["Summary", "DBC Overview", "Message Details", "Signal Details", "Pairing Review"],
         )
 
     def test_summary_total_matches_the_result(self):
@@ -74,6 +74,7 @@ class BaselineReportTests(unittest.TestCase):
         context = {"CAN ID", "ECU Node Tx", "ECU Node Rx"}
         shared = {
             "DBC File", "Change Type", "Confidence Score", "Confidence Level", "Match Reason", "Changed Properties",
+            "Pair ID", "Review Required",
         } | context
         expected = {
             "Message Details": shared | {"Old Message Name", "New Message Name"},
@@ -211,7 +212,7 @@ class ReportInputModeTests(unittest.TestCase):
                     output = write_excel_report(filter_result(result, {"Modified"}), root / "folders.xlsx")
                     workbook = load_workbook(output)
                     try:
-                        self.assertEqual(workbook.sheetnames,
+                        self.assertEqual(workbook.sheetnames[:4],
                                          ["Summary", "DBC Overview", "Message Details", "Signal Details"])
                         self.assertEqual(workbook["DBC Overview"].max_row, 2)
                     finally:

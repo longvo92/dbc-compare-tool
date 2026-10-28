@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import os
+import tempfile
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -69,6 +71,29 @@ _BORDER = BORDER
 
 # Keep identity and routing context available for impact-review filtering.
 _CONTEXT_HEADERS = ["CAN ID", "ECU Node Tx", "ECU Node Rx"]
+EXCEL_MAX_ROWS = 1_048_576
+EXCEL_MAX_CELL_LENGTH = 32_767
+
+
+class ReportExportError(ValueError):
+    pass
+
+
+def _append(sheet, values):
+    if any(isinstance(value, str) and len(value) > EXCEL_MAX_CELL_LENGTH for value in values):
+        raise ReportExportError(f"Excel cell text limit exceeded in {sheet.title}")
+    if sheet.max_row >= EXCEL_MAX_ROWS:
+        raise ReportExportError(f"Excel row limit exceeded in {sheet.title}")
+    sheet.append(values)
+
+
+def _review_rows(result):
+    # Include every competing edge, even if it is far below the selected score.
+    selected_review = [p for p in result.pairings if p.requires_review]
+    involved = {(p.old, p.new) for p in selected_review}
+    involved.update((a, b) for p in selected_review for a, b, _ in p.competitors)
+    pairs = [p for p in result.pairing_candidates if (p.old, p.new) in involved or not p.selected]
+    return sorted(pairs + result.move_suggestions, key=lambda p: p.pair_id)
 
 
 def default_report_path(new_path: Path) -> Path:
@@ -78,6 +103,10 @@ def default_report_path(new_path: Path) -> Path:
 
 
 def write_excel_report(result: ComparisonResult, output_path: Path) -> Path:
+    review = _review_rows(result)
+    for count in (len(result.message_changes), len(result.signal_changes), len(result.file_pairs), len(review)):
+        if count + 1 > EXCEL_MAX_ROWS:
+            raise ReportExportError("Excel row limit exceeded; all eligible review candidates must be exported")
     workbook = Workbook()
     summary_sheet = workbook.active
     summary_sheet.title = "Summary"
@@ -96,8 +125,39 @@ def write_excel_report(result: ComparisonResult, output_path: Path) -> Path:
     _format_detail_sheet(message_sheet, change_col=2, conf_score_col=6, conf_level_col=7)
     _format_detail_sheet(signal_sheet, change_col=4, conf_score_col=7, conf_level_col=8)
 
+    if review:
+        sheet = workbook.create_sheet("Pairing Review")
+        _append(sheet, ["Pair ID", "Category", "Entity", "OLD Identity", "NEW Identity", "OLD DBC Path", "NEW DBC Path",
+                      "OLD Parent", "NEW Parent", "Similarity", "Confidence Score", "Confidence Level",
+                      "Selected", "Review Required", "Reason"])
+        for pair in review:
+            _append(sheet, [pair.pair_id, pair.category, (pair.old or pair.new).kind,
+                pair.old.display() if pair.old else "", pair.new.display() if pair.new else "",
+                pair.old.dbc_path if pair.old else "", pair.new.dbc_path if pair.new else "",
+                str(pair.old.parent) if pair.old else "", str(pair.new.parent) if pair.new else "",
+                pair.similarity, pair.confidence, pair.confidence_level,
+                "Yes" if pair.selected else "No", "Yes" if pair.requires_review else "No", "; ".join(pair.evidence)])
+        _format_detail_sheet(sheet, change_col=2, conf_score_col=11, conf_level_col=12)
+
+    for sheet in workbook:
+        if sheet.max_row > EXCEL_MAX_ROWS:
+            raise ReportExportError("Excel row limit exceeded")
+        for row in sheet:
+            for cell in row:
+                if isinstance(cell.value, str):
+                    if len(cell.value) > EXCEL_MAX_CELL_LENGTH:
+                        raise ReportExportError(f"Excel cell text limit exceeded in {sheet.title}")
+                    cell.data_type = "s"
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    workbook.save(output_path)
+    descriptor, temporary = tempfile.mkstemp(suffix=".xlsx", dir=output_path.parent)
+    os.close(descriptor)
+    try:
+        workbook.save(temporary)
+        os.replace(temporary, output_path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+        workbook.close()
     return output_path
 
 
@@ -107,26 +167,37 @@ def write_excel_report(result: ComparisonResult, output_path: Path) -> Path:
 
 def _write_summary(sheet, result: ComparisonResult) -> None:
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
-    sheet.append(["DBC Compare Tool  —  Comparison Report", generated])
-    sheet.append([])                                           # blank separator
-    sheet.append(["Metric", "Count"])
+    _append(sheet, ["DBC Compare Tool  —  Comparison Report", generated])
+    _append(sheet, [])                                           # blank separator
+    _append(sheet, ["Metric", "Count"])
     summary = result.summary()
     for metric in SUMMARY_ORDER:
-        sheet.append([metric, summary.get(metric, 0)])
+        _append(sheet, [metric, summary.get(metric, 0)])
     for metric in summary:
         if metric not in SUMMARY_ORDER:
-            sheet.append([metric, summary[metric]])
-    sheet.append(["Report Mode", "Include Unchanged" if result.include_unchanged else "Changes only"])
-    sheet.append(["Parse Errors (skipped DBCs)", sum(fp.status == "Parse Error" for fp in result.file_pairs)])
+            _append(sheet, [metric, summary[metric]])
+    _append(sheet, ["Report Mode", "Include Unchanged" if result.include_unchanged else "Changes only"])
+    _append(sheet, ["Parse Errors (skipped DBCs)", len(result.diagnostics)])
+    _append(sheet, ["Completeness", result.completeness])
+    _append(sheet, ["Matching Policy", result.policy_version])
+    _append(sheet, ["Pairs Requiring Review", result.review_count])
+    _append(sheet, ["Confidence", "Heuristic; review competing candidates and parent uncertainty"])
+    for group, counts in result.coverage.items():
+        text = "; ".join(f"{key}: {counts.get(key, 0)}" for key in ("paired", "unmatched", "not compared"))
+        if "unknown" in counts:
+            text += "; unreadable entities: Unknown"
+        _append(sheet, [f"Coverage {group}", text])
+    for diagnostic in result.diagnostics:
+        _append(sheet, [f"Parse Error {diagnostic.side} {diagnostic.path}", diagnostic.reason])
     if result.ecu_map:
-        sheet.append([])
-        sheet.append(["ECU Node"])
+        _append(sheet, [])
+        _append(sheet, ["ECU Node"])
         for old_node, new_node in sorted(result.ecu_map.items()):
-            sheet.append([_fmt_transition(old_node, new_node)])
+            _append(sheet, [_fmt_transition(old_node, new_node)])
 
 
 def _write_overview(sheet, file_pairs: list[FilePairSummary]) -> None:
-    sheet.append([
+    _append(sheet, [
         "Status",
         "Path",
         "Pairing Confidence",
@@ -135,18 +206,20 @@ def _write_overview(sheet, file_pairs: list[FilePairSummary]) -> None:
         "Pairing Reason",
     ])
     for fp in file_pairs:
-        sheet.append([
+        _append(sheet, [
             fp.status,
             _fmt_transition(fp.old_path, fp.new_path, change_type=fp.status),
             _fmt_confidence(fp.pairing_confidence),
-            _fmt_transition(fp.message_count_old, fp.message_count_new, change_type=fp.status),
-            _fmt_transition(fp.signal_count_old, fp.signal_count_new, change_type=fp.status),
+            _fmt_transition(fp.message_count_old if fp.message_count_old is not None else "Unknown",
+                            fp.message_count_new if fp.message_count_new is not None else "Unknown", change_type=fp.status),
+            _fmt_transition(fp.signal_count_old if fp.signal_count_old is not None else "Unknown",
+                            fp.signal_count_new if fp.signal_count_new is not None else "Unknown", change_type=fp.status),
             "; ".join(fp.pairing_reasons),
         ])
 
 
 def _write_message_details(sheet, changes: list[Change]) -> None:
-    sheet.append([
+    _append(sheet, [
         "DBC File",
         "Change Type",
         "Old Message Name",
@@ -157,10 +230,11 @@ def _write_message_details(sheet, changes: list[Change]) -> None:
         "Match Reason",
         *_CONTEXT_HEADERS[1:],
         "Changed Properties",
+        "Pair ID", "Review Required",
     ])
     for change in changes:
         can_id, transmitter, receivers = _context_values(change)
-        sheet.append([
+        _append(sheet, [
             _dbc_label(change.dbc_file),
             change.change_type,
             change.old_name,
@@ -172,11 +246,13 @@ def _write_message_details(sheet, changes: list[Change]) -> None:
             transmitter,
             receivers,
             _changed_properties(change),
+            change.pairing.pair_id if change.pairing else "",
+            "Yes" if change.pairing and change.pairing.requires_review else "No",
         ])
 
 
 def _write_signal_details(sheet, changes: list[Change]) -> None:
-    sheet.append([
+    _append(sheet, [
         "DBC File",
         "Parent Message (Old)",
         "Parent Message (New)",
@@ -188,9 +264,10 @@ def _write_signal_details(sheet, changes: list[Change]) -> None:
         "Match Reason",
         *_CONTEXT_HEADERS,
         "Changed Properties",
+        "Pair ID", "Review Required",
     ])
     for change in changes:
-        sheet.append([
+        _append(sheet, [
             _dbc_label(change.dbc_file),
             *_parent_message_names(change),
             change.change_type,
@@ -201,6 +278,8 @@ def _write_signal_details(sheet, changes: list[Change]) -> None:
             _match_reason(change),
             *_context_values(change, signal=True),
             _changed_properties(change),
+            change.pairing.pair_id if change.pairing else "",
+            "Yes" if change.pairing and change.pairing.requires_review else "No",
         ])
 
 
@@ -246,6 +325,10 @@ def _format_summary(sheet) -> None:
             for cell in row:
                 cell.fill = header_fill
                 cell.font = header_font
+        if metric == "Completeness" and sheet.cell(row_idx, 2).value == "Incomplete":
+            for cell in row:
+                cell.fill = PatternFill("solid", fgColor="FFC7CE")
+                cell.font = Font(bold=True, color="9C0006")
         sheet.row_dimensions[row_idx].height = 18
 
     for column, default_width in (("A", 30), ("B", 24)):
@@ -377,11 +460,7 @@ def _match_reason(change: Change) -> str:
     """Retain rename evidence without copying technical property changes."""
     if change.change_type != "Renamed":
         return ""
-    marker = "Matched by: "
-    for line in reversed(change.description.splitlines()):
-        if line.startswith(marker):
-            return line[len(marker):]
-    return ""
+    return "; ".join(change.pairing.evidence) if change.pairing else ""
 
 
 def _message_receivers(message: Message | None) -> str:

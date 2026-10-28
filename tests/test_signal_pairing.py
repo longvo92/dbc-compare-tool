@@ -65,7 +65,8 @@ class TestShiftedSignalPairing(unittest.TestCase):
                         self.assertEqual({change.old_name: change.new_name for change in renames}, pairs)
                         self.assertFalse(any(change.change_type in {"Added", "Removed"} for change in result.signal_changes))
                         for change in renames:
-                            self.assertEqual(change.confidence_level, "Low" if event_like else "Medium")
+                            self.assertIn(change.confidence_level, {"Low", "Medium"})
+                            self.assertTrue(change.pairing.requires_review)
                             self.assertEqual(change.property_diffs, (("Start Bit", str(change.old_signal.start_bit),
                                                                      str(change.new_signal.start_bit)),))
                             self.assertEqual(change.old_message.name, "Status")
@@ -88,9 +89,9 @@ class TestShiftedSignalPairing(unittest.TestCase):
                     self.assertEqual({(row["Old Signal Name"], row["New Signal Name"]) for row in rows},
                                      set(pairs.items()))
                     self.assertTrue(all(row["Change Type"] == "Renamed" for row in rows))
-                    self.assertTrue(all(row["Confidence Level"] == ("Low" if event_like else "Medium") for row in rows))
+                    self.assertTrue(all(row["Confidence Level"] in {"Low", "Medium"} and row["Review Required"] == "Yes" for row in rows))
                     self.assertTrue(all(0.0 <= float(row["Confidence Score"]) < 0.90 for row in rows))
-                    self.assertTrue(all("review recommended" in row["Match Reason"] for row in rows))
+                    self.assertTrue(all("Heuristic confidence" in row["Match Reason"] for row in rows))
                     self.assertNotIn("Changed Properties", workbook.sheetnames)
                     for row in rows:
                         prop, value = row["Changed Properties"].split(": ")

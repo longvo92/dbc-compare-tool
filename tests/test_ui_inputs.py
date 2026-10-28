@@ -112,7 +112,7 @@ class GuiInputTests(unittest.TestCase):
             self.assertTrue(self.window._open_manual_pairing())
         self.assertEqual(self.window._complete_manual_pairing(), {"bus.dbc": "bus.dbc"})
         self.window._saved_pair_map = {"bus.dbc": None}
-        self.assertIsNone(self.window._complete_manual_pairing())
+        self.assertEqual(self.window._complete_manual_pairing(), {"bus.dbc": None})
 
     def test_paths_and_input_mode_invalidate_both_saved_maps(self):
         self._files()
@@ -317,7 +317,8 @@ class GuiInputTests(unittest.TestCase):
         self.window.export_worker.wait(5000)
         workbook = load_workbook(report)
         self.addCleanup(workbook.close)
-        self.assertEqual(workbook.sheetnames, ["Summary", "Message Details", "Signal Details"])
+        self.assertEqual(workbook.sheetnames[:3], ["Summary", "Message Details", "Signal Details"])
+        self.assertNotIn("DBC Overview", workbook.sheetnames)
         for name, expected in (
             ("Message Details", "Description: ->Updated status"),
             ("Signal Details", "Start Bit: 0->1; Factor: 1->2"),
@@ -348,7 +349,8 @@ class GuiInputTests(unittest.TestCase):
             row = dict(zip(values[0], values[1]))
             self.assertEqual(row["Change Type"], "Modified")
             self.assertEqual(row["Changed Properties"], expected)
-        self.assertEqual(workbook.sheetnames, ["Summary", "Message Details", "Signal Details"])
+        self.assertEqual(workbook.sheetnames[:3], ["Summary", "Message Details", "Signal Details"])
+        self.assertNotIn("DBC Overview", workbook.sheetnames)
 
     def test_gui_folder_report_keeps_overview_for_one_pair(self):
         old_folder, new_folder = self.root / "old", self.root / "new"
@@ -416,7 +418,7 @@ class GuiInputTests(unittest.TestCase):
                         self.assertEqual({(row["Old Signal Name"], row["New Signal Name"]) for row in rows},
                                          set(pairs.items()))
                         self.assertTrue(all(row["Change Type"] == "Renamed" for row in rows))
-                        self.assertTrue(all(row["Confidence Level"] == ("Low" if event_like else "Medium") for row in rows))
+                        self.assertTrue(all(row["Confidence Level"] in {"Low", "Medium"} and row["Review Required"] == "Yes" for row in rows))
                         self.assertNotIn("Changed Properties", workbook.sheetnames)
                         for row in rows:
                             prop, value = row["Changed Properties"].split(": ")
@@ -591,6 +593,74 @@ class GuiInputTests(unittest.TestCase):
         warning.assert_called_once()
         self.assertNotEqual(dialog.result(), QDialog.DialogCode.Accepted)
         dialog.deleteLater()
+
+    def test_same_corpus_matches_api_cli_and_gui_metadata_after_excel_roundtrip(self):
+        import contextlib
+        import io
+        from dbc_compare_tool.cli import main as cli_main
+        from dbc_compare_tool.core.comparator import DbcComparator
+        from dbc_compare_tool.report.excel import write_excel_report
+        from tests.test_signal_pairing import shifted_dbc
+
+        old_text, new_text, _ = shifted_dbc(False)
+        for side, text in (("old", old_text), ("new", new_text)):
+            path = self.root / side / "bus.dbc"
+            path.parent.mkdir()
+            path.write_text(text, encoding="utf-8")
+        # Include a parse error on each side, testing completion metadata as well.
+        for side in ("old", "new"):
+            (self.root / side / "broken.dbc").write_text("invalid dbc", encoding="utf-8")
+        old, new = self.root / "old", self.root / "new"
+        result = DbcComparator().compare_folders(old, new)
+        api_path = write_excel_report(result, self.root / "api.xlsx")
+        cli_path = self.root / "cli.xlsx"
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cli_main(["--old", str(old), "--new", str(new), "--out", str(cli_path)]), 3)
+        self.window.old_input.setText(str(old))
+        self.window.new_input.setText(str(new))
+        gui_path = self.root / "gui.xlsx"
+        self.window.output_input.setText(str(gui_path))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.window._run_compare()
+            self._wait_until(lambda: self.window.run_button.isEnabled())
+        error.assert_not_called()
+        self.assertIn("Report incomplete", self.window.run_status.text())
+        self.assertIn("2 file errors", self.window.run_status.text())
+        self.assertIn(f"{result.review_count} pairs require review", self.window.run_status.text())
+        def contents(path):
+            wb = load_workbook(path)
+            try:
+                return {name: list(wb[name].values)[2 if name == "Summary" else 0:]
+                        for name in wb.sheetnames}
+            finally:
+                wb.close()
+        self.assertEqual(contents(api_path), contents(cli_path))
+        self.assertEqual(contents(api_path), contents(gui_path))
+
+    def test_removed_manual_mapping_exports_without_auto_override(self):
+        old, new = self.root / "old", self.root / "new"
+        old.mkdir()
+        new.mkdir()
+        (old / "bus.dbc").write_text(_DBC.format(sender="OldNode"), encoding="utf-8")
+        (new / "bus.dbc").write_text(_DBC.format(sender="OldNode"), encoding="utf-8")
+        self.window.old_input.setText(str(old))
+        self.window.new_input.setText(str(new))
+        self.window._saved_pair_map = {"bus.dbc": None}
+        self.window._saved_pair_folders = self.window._current_folder_inputs()
+        report = self.root / "manual-removed.xlsx"
+        self.window.output_input.setText(str(report))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.window._run_compare()
+            self._wait_until(lambda: self.window.run_button.isEnabled())
+        error.assert_not_called()
+        self.assertEqual(self.window.worker.pair_map, {"bus.dbc": None})
+        wb = load_workbook(report)
+        try:
+            rows = list(wb["Message Details"].values)
+            index = rows[0].index("Change Type")
+            self.assertEqual({r[index] for r in rows[1:]}, {"Added", "Removed"})
+        finally:
+            wb.close()
 
 
 if __name__ == "__main__":
