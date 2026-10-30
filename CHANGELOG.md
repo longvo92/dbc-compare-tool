@@ -10,6 +10,15 @@ for the procedure.
 
 ## [Unreleased]
 
+### Changed
+
+- Restore the 0.6.7 DBC, message and signal matching order, scoring and thresholds. Unmatched entities are Added/Removed; the competing-candidate and move-suggestion review output is removed.
+- Keep 0.7.0 duplicate-inventory checks, incomplete-report diagnostics and atomic Excel export. Remove the `policy` constructor argument and recall-only result metadata; see the migration notes in `docs/architecture.md`.
+
+### Fixed
+
+- Avoid generating and styling large Pairing Review sheets for unchanged DBCs, restoring practical comparison and export times.
+
 ## [0.7.0] - 2026-10-28
 
 ### Changed

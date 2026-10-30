@@ -30,22 +30,21 @@ Install the core with `pip install -e .`, or the GUI with `pip install -e ".[gui
 
 Exit codes: **0** complete export; **1** direct-file parse, processing or export failure; **2** invalid input/mapping; **3** exported but incomplete. Automation should inspect code 3 and the report's diagnostics.
 
-## Pairing and review
+## Pairing
 
-`recall-v1` first maximizes the number of pairs with minimum evidence, then their total similarity. DBC, message and signal matching are one-to-one and hierarchical. Completely unrelated entities remain unmatched. A same path, frame key or name is strong evidence but cannot reserve an automatic pair. Selecting two files directly or saving a manual DBC map forces those file pairs.
+`classic-v067` pairs same-path DBCs first and then searches for renamed files. Within paired files it matches messages by frame key, then name, then rename score. Within paired messages it matches signals by name and then rename score. Selecting two files directly or saving a manual DBC map forces those file pairs.
 
-Weak pairs are retained with **Review Required**. **High/Medium/Low** confidence is heuristic; ambiguity, a competing better candidate or a parent requiring review lowers it. Child confidence never exceeds an inferred parent's. A confidence of 1.0 for automatic matching requires a unique complete-property match with no competitors.
+Rename scores must reach 0.55 for DBCs, 0.60 for messages, 0.65 for signals or 0.55 for event-like signals. Unmatched entities become Added/Removed. **High/Medium/Low** confidence for selected renames is heuristic; ambiguity can lower it.
 
-Possible message moves across DBCs and signal moves across messages are suggestions only. They do not replace Added/Removed rows or change totals. Manual exclusions are respected. Split/merge matching and message/signal mapping editors are not supported.
+Message moves across DBCs and signal moves across messages appear as Added/Removed. Split/merge matching and message/signal mapping editors are not supported.
 
 ## Excel
 
-- Begin with **Summary**: Complete/Incomplete, matching policy, change totals, coverage, file diagnostics, ECU mappings and review count. Coverage accounts for known entities as paired, unmatched or not compared; unreadable inventory is **Unknown**.
+- Begin with **Summary**: Complete/Incomplete, matching policy, change totals, coverage, file diagnostics and ECU mappings. Coverage accounts for known entities as paired, unmatched or not compared; unreadable inventory is **Unknown**.
 - Folder reports include **DBC Overview**. Direct-file reports omit it. If a forced counterpart cannot be parsed, its valid peer is **Not compared**, not Added/Removed.
-- Filter **Message Details** and **Signal Details** by type, CAN ID or ECU. **Pair ID** identifies the pair; **Review Required** survives filtering and unchanged-row suppression through **Pairing Review**.
-- **Pairing Review** appears when needed. It lists selected pairs requiring review, all eligible competitors and possible parent moves, with full OLD/NEW identities, paths, parents, similarity, confidence, selection and reasons. No candidate truncation is applied; exceeding Excel row or cell limits fails export.
+- Filter **Message Details** and **Signal Details** by type, CAN ID or ECU. Rename confidence and match reasons appear on selected rename rows. Unchanged rows appear only with Include Unchanged.
 - Names and parent names have separate OLD/NEW columns. Other fields show equal values once or changes as `old->new`. Added/removed entries show only the existing side.
 - **Changed Properties** combines deltas, e.g. `Start Bit: 56->57; Length: 8->16`. No property delta means a blank cell. Use **Text Filters → Contains** for cells listing several ECUs.
 - Close the workbook before regenerating it. Duplicate message names/frame keys or signal names are parse errors. Direct-file errors stop export; folder errors allow a partial report.
 
-Matching has synthetic regression and corpus coverage; no production corpus with labeled mappings is available.
+Matching has synthetic regression coverage; no production corpus with labeled mappings is available.

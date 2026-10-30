@@ -19,7 +19,7 @@ Compare two CAN DBC files or baseline folders and export changes to Excel. Detec
 | Feature | Use it to |
 |---|---|
 | File or folder comparison | Compare individual DBCs or complete baselines |
-| Recall-first pairing | Match DBCs, messages and signals; flag weak or competing pairs for review |
+| Classic pairing | Match DBCs by path, then rename evidence; match messages by frame/name, then signals by name/rename evidence |
 | ECU pairing | Map renamed nodes and review routing changes |
 | Excel reports | Filter changes and inspect OLD/NEW property values |
 
@@ -37,14 +37,12 @@ See the [User Guide](resources/help/user_guide.md) for pairing, CLI and Excel ba
 
 | Sheet | Use it to |
 |---|---|
-| Summary | Check Complete/Incomplete status, policy, inventory coverage and review counts |
+| Summary | Check Complete/Incomplete status, policy and inventory coverage |
 | DBC Overview (folder mode only) | Review file pairs, paths and parse errors |
 | Message Details | Review message changes and ECU routing |
-| Signal Details | Review signal changes and heuristic confidence |
-| Pairing Review (when needed) | Inspect weak pairs, all competing candidates and possible parent moves |
+| Signal Details | Review signal changes and rename confidence |
 
 Use Excel column filters to find a change type, CAN ID or ECU.
-Use **Pair ID** to trace a pair into **Pairing Review**, and filter **Review Required** for uncertain results.
 Read **Changed Properties** in each detail sheet for compact deltas, such as `Start Bit: 56->57; Length: 8->16`.
 Message and signal names, including parent message names, use separate OLD/NEW columns. Other fields show unchanged values once (`EVCC`) and changes as `EVCC->EVCC2`. Added/removed entries show only the existing value, without an arrow.
 
@@ -77,11 +75,11 @@ From the repository folder, start the GUI with `.\run_gui.bat`, or run the CLI:
 
 ## Review the results
 
-- The shared `recall-v1` policy maximizes eligible pair count, then similarity. Same path, CAN ID and name are evidence rather than fixed matches; only direct-file selection and manual DBC mapping force a pair.
-- Weak pairs remain visible. Review **Review Required**, confidence and **Pairing Review**; confidence is a heuristic, not a probability. Parent uncertainty limits child confidence.
+- The `classic-v067` policy pairs same-path DBCs first, then detects renamed files. Within paired files it matches messages by frame key, then name, then rename score; within paired messages it matches signals by name, then rename score.
+- Rename thresholds are 0.55 for DBCs, 0.60 for messages, 0.65 for signals and 0.55 for event-like signals. Unmatched entities are Added/Removed. Rename confidence remains heuristic.
 - Folder parse errors produce an **Incomplete** report with OLD/NEW paths and causes. Unreadable counts are **Unknown**; a valid file whose fixed manual counterpart failed is **Not compared**. Direct-file parse errors stop export.
 - Message names and frame keys must be unique per DBC; signal names must be unique per message. Duplicate entities are rejected, including in the database API.
-- Saved manual mappings are respected, including **Removed** rows. Possible message/signal moves appear only as suggestions and leave the main Added/Removed results unchanged.
+- Saved manual mappings are respected, including **Removed** rows. Message/signal moves across parents appear as Added/Removed.
 - CLI exit codes: `0` complete, `1` parse/processing/export failure, `2` invalid input/mapping, **`3` report exported but incomplete**. Update scripts that previously treated partial reports as success.
 - **Unchanged** describes an item's own properties. Its parent or children may still change. Synthetic regression results do not establish production matching accuracy.
 

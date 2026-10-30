@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Report written: {output_path}")
     print(f"Total changes: {result.summary()['Total Changes']}")
-    print(f"{result.completeness}; policy {result.policy_version}; {result.review_count} pairs require review")
+    print(f"{result.completeness}; policy {result.policy_version}")
     return 3 if result.completeness == "Incomplete" else 0
 
 

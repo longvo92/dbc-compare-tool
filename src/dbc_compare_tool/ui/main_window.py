@@ -313,8 +313,7 @@ class ExportWorker(QThread):
             self.log.emit("Writing Excel report...")
             write_excel_report(self.result, self.output_path)
             self.completed.emit(self.output_path, dict(self.result.summary(),
-                completeness=self.result.completeness, parse_error_count=len(self.result.diagnostics),
-                review_count=self.result.review_count))
+                completeness=self.result.completeness, parse_error_count=len(self.result.diagnostics)))
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -1067,8 +1066,7 @@ class MainWindow(QMainWindow):
         self.last_report = report_path
         status = "Report incomplete" if summary.get("completeness") == "Incomplete" else "Report ready"
         self.run_status.setText(f"{status} · {summary['Total Changes']} changes · "
-                               f"{summary.get('parse_error_count', 0)} file errors · "
-                               f"{summary.get('review_count', 0)} pairs require review")
+                               f"{summary.get('parse_error_count', 0)} file errors")
         self._log(f"Report generated: {report_path}")
         self._log(f"Total changes: {summary['Total Changes']}")
         self._save_paths()

@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from dbc_compare_tool.core.policy import RECALL_V1, MatchingPolicy
 
 
 def jaccard(left: set[tuple[Any, ...]], right: set[tuple[Any, ...]]) -> float:
@@ -115,7 +114,6 @@ class FilePairSummary:
     signal_count_old: int | None
     signal_count_new: int | None
     pairing_reasons: tuple[str, ...] = ()
-    pairing: PairingMetadata | None = None
 
 
 @dataclass(frozen=True)
@@ -135,7 +133,6 @@ class Change:
     new_message: Message | None = None
     old_signal: Signal | None = None
     new_signal: Signal | None = None
-    pairing: PairingMetadata | None = None
 
 
 @dataclass(frozen=True, order=True)
@@ -164,26 +161,6 @@ class EntityIdentity:
         return (self.dbc_path,)
 
 
-@dataclass
-class PairingMetadata:
-    old: EntityIdentity | None
-    new: EntityIdentity | None
-    similarity: float | None = None
-    confidence: float | None = None
-    evidence: tuple[str, ...] = ()
-    competitors: tuple[tuple[EntityIdentity, EntityIdentity, float], ...] = ()
-    requires_review: bool = False
-    selected: bool = True
-    fixed: bool = False
-    category: str = "Pair"
-    pair_id: str = ""
-    policy: MatchingPolicy = RECALL_V1
-
-    @property
-    def confidence_level(self) -> str:
-        return self.policy.confidence_level(self.confidence)
-
-
 @dataclass(frozen=True)
 class Diagnostic:
     side: str
@@ -201,18 +178,11 @@ class ComparisonResult:
     is_file_comparison: bool = False
     diagnostics: list[Diagnostic] = field(default_factory=list)
     inventory: dict[EntityIdentity, str] = field(default_factory=dict)
-    pairings: list[PairingMetadata] = field(default_factory=list)
-    pairing_candidates: list[PairingMetadata] = field(default_factory=list)
-    move_suggestions: list[PairingMetadata] = field(default_factory=list)
-    policy_version: str = "recall-v1"
+    policy_version: str = "classic-v067"
 
     @property
     def completeness(self) -> str:
         return "Incomplete" if self.diagnostics else "Complete"
-
-    @property
-    def review_count(self) -> int:
-        return sum(pair.requires_review for pair in self.pairings)
 
     @property
     def coverage(self) -> dict[str, dict[str, int | None]]:

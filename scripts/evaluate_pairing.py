@@ -1,216 +1,70 @@
-"""Deterministic labeled synthetic corpus and fixed performance fixture.
-
-Run with PYTHONPATH=src: python scripts/evaluate_pairing.py [--benchmark].
-JSON goes to stdout; nonzero exit means a corpus acceptance condition failed.
-No production accuracy claim follows from these generated fixtures.
-"""
-
+"""End-to-end DBC comparison benchmark for the classic matching engine."""
 from __future__ import annotations
 
 import argparse
 import json
+import statistics
 import tempfile
 import time
-import tracemalloc
 from pathlib import Path
 
 from dbc_compare_tool.core.comparator import DbcComparator
-from dbc_compare_tool.core.policy import name_similarity
-
-CORPUS = Path(__file__).resolve().parents[1] / "tests/fixtures/pairing_corpus.json"
+from dbc_compare_tool.report.excel import write_excel_report
 
 
-def create_case(root: Path, spec: dict):
-    """Materialize DBCs and independent expected identities from a case schema."""
-    expected = {"dbc": set(), "message": set(), "signal": set()}
-    paths = (
-        spec.get("old_path", "Powertrain_v1.dbc"),
-        spec.get("new_path", "Powertrain_v2.dbc"),
-    )
-    names = {}
-    for side in ("old", "new"):
-        is_new = side == "new"
-        prefix = spec.get(f"prefix_{side}", "Original")
-        ecu = spec.get(f"ecu_{side}", "ECU")
-        unrelated = is_new and spec.get("unrelated", False)
-        if unrelated:
-            ecu = "OTHER"
-        text = f'VERSION ""\nBU_: {ecu}\n'
-        records = []
-        for m in range(spec["messages"]):
-            frame = 100 + m + (spec.get("frame_shift", 0) if is_new else 0)
-            name = f"{prefix}_Message_{m}"
-            dlc = 4 if unrelated else 64
-            text += f"BO_ {frame} {name}: {dlc} {ecu}\n"
-            signals = []
-            if spec.get("multiplexed"):
-                mux_name = f"{prefix}_Mux" if spec.get("rename_mux") else "Mux"
-                text += f' SG_ {mux_name} M : 0|8@1+ (1,0) [0|255] "" {ecu}\n'
-                signals.append(mux_name)
-            for s in range(spec["signals"]):
-                sig = f"{prefix}_Signal_{s}"
-                if spec.get("ambiguous"):
-                    # Equal names' suffix similarity and identical properties create
-                    # several equally plausible identities; only count is labeled.
-                    sig = chr((65 if not is_new else 75) + s) * 4
-                mux = f" m{s + 1}" if spec.get("multiplexed") else ""
-                start = 8 if mux else 0 if spec.get("ambiguous") else 16 * s
-                start += spec.get("shift", 0) if is_new else 0
-                unit = "unit" if spec.get("ambiguous") else f"Unit{s}"
-                if unrelated:
-                    text += (
-                        f' SG_ {sig} : {8 * s + 7}|3@0- (7,9) [9|30] "other" {ecu}\n'
-                    )
-                else:
-                    text += (
-                        f' SG_ {sig}{mux} : {start}|8@1+ (1,0) [0|255] "{unit}" {ecu}\n'
-                    )
-                signals.append(sig)
-            records.append((frame, name, signals))
-        target = root / side / paths[is_new]
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text, encoding="utf-8")
-        names[side] = records
-    if spec.get("unrelated"):
-        return expected
-    expected["dbc"].add((paths[0], paths[1]))
-    for old, new in zip(names["old"], names["new"]):
-        expected["message"].add((paths[0], old[0], old[1], paths[1], new[0], new[1]))
-        for a, b in zip(old[2], new[2]):
-            expected["signal"].add(
-                (paths[0], old[0], old[1], a, paths[1], new[0], new[1], b)
+def _dbc(messages: int, changed: bool) -> str:
+    lines = ['VERSION ""', 'BU_: ECU']
+    for index in range(messages):
+        lines.append(f'BO_ {100 + index} VehicleStatus_{index:04d}: 8 ECU')
+        for signal in range(8):
+            factor = 2 if changed and index == messages - 1 and signal == 7 else 1
+            lines.append(
+                f' SG_ Value_{index:04d}_{signal} : {signal * 8}|8@1+ '
+                f'({factor},0) [0|255] "" ECU'
             )
-    return expected
+    return "\n".join(lines) + "\n"
 
 
-def pair_key(pair):
-    a, b = pair.old, pair.new
-    if a.kind == "dbc":
-        return a.dbc_path, b.dbc_path
-    if a.kind == "message":
-        return (
-            a.dbc_path,
-            a.frame_id,
-            a.message_name,
-            b.dbc_path,
-            b.frame_id,
-            b.message_name,
-        )
-    return (
-        a.dbc_path,
-        a.frame_id,
-        a.message_name,
-        a.signal_name,
-        b.dbc_path,
-        b.frame_id,
-        b.message_name,
-        b.signal_name,
-    )
+def benchmark(sizes=(32, 128, 256, 1024), repeats=3):
+    measured = []
+    with tempfile.TemporaryDirectory(prefix="dbc-benchmark-") as temporary:
+        root = Path(temporary)
+        for size in sizes:
+            old, new = root / "old.dbc", root / "new.dbc"
+            old.write_text(_dbc(size, False), encoding="utf-8")
+            for changed in (False, True):
+                new.write_text(_dbc(size, changed), encoding="utf-8")
+                for include_unchanged in (False, True):
+                    runs = []
+                    for _ in range(repeats):
+                        start = time.perf_counter()
+                        result = DbcComparator(include_unchanged=include_unchanged).compare_files(old, new)
+                        compared = time.perf_counter()
+                        write_excel_report(result, root / "report.xlsx")
+                        exported = time.perf_counter()
+                        runs.append((compared - start, exported - compared))
+                    measured.append({
+                        "messages_per_file": size,
+                        "signals_per_message": 8,
+                        "changed": changed,
+                        "include_unchanged": include_unchanged,
+                        "compare_seconds_median": round(statistics.median(run[0] for run in runs), 3),
+                        "export_seconds_median": round(statistics.median(run[1] for run in runs), 3),
+                        "total_seconds_median": round(statistics.median(sum(run) for run in runs), 3),
+                    })
+    return measured
 
 
-def evaluate_case(root, spec):
-    expected = create_case(root, spec)
-    result = DbcComparator(ecu_map=spec.get("ecu_map")).compare_folders(
-        root / "old", root / "new"
-    )
-    metrics = {}
-    passed = result.completeness == "Complete"
-    for kind, gold in expected.items():
-        selected = {
-            pair_key(p)
-            for p in result.pairings
-            if p.old and p.new and p.old.kind == kind
-        }
-        correct = len(selected & gold)
-        ambiguous = spec.get("ambiguous") and kind == "signal"
-        metrics[kind] = {
-            "expected": len(gold),
-            "selected": len(selected),
-            "recall": None if ambiguous else correct / len(gold) if gold else 1.0,
-            "precision": None
-            if ambiguous
-            else correct / len(selected)
-            if selected
-            else (1.0 if not gold else 0.0),
-            "coverage": sum(
-                n
-                for group, values in result.coverage.items()
-                if group.endswith(f" {kind}")
-                for status, n in values.items()
-                if status == "paired"
-            )
-            / sum(
-                n
-                for group, values in result.coverage.items()
-                if group.endswith(f" {kind}")
-                for n in values.values()
-            ),
-        }
-        if ambiguous:
-            passed = (
-                passed
-                and len(selected) == len(gold)
-                and all(
-                    p.requires_review
-                    for p in result.pairings
-                    if p.old and p.old.kind == kind
-                )
-            )
-        else:
-            passed = passed and selected == gold
-    return {
-        "name": spec["name"],
-        "passed": passed,
-        "metrics": metrics,
-        "review_count": result.review_count,
-        "diagnostics": len(result.diagnostics),
-    }
-
-
-def benchmark():
-    """Measure the fixed fixture with a cold name-similarity cache."""
-    spec = {
-        "name": "fixed-32x12",
-        "messages": 32,
-        "signals": 12,
-        "prefix_old": "VCU",
-        "prefix_new": "IVC",
-        "shift": 1,
-    }
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        create_case(root, spec)
-        name_similarity.cache_clear()
-        tracemalloc.start()
-        start = time.perf_counter()
-        result = DbcComparator().compare_folders(root / "old", root / "new")
-        elapsed = time.perf_counter() - start
-        peak = tracemalloc.get_traced_memory()[1]
-        tracemalloc.stop()
-        return {
-            "fixture": spec["name"],
-            "seconds": elapsed,
-            "peak_bytes": peak,
-            "message_changes": len(result.message_changes),
-            "signal_changes": len(result.signal_changes),
-        }
-
-
-def main(argv=None):
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--benchmark", action="store_true")
-    args = parser.parse_args(argv)
-    with tempfile.TemporaryDirectory() as tmp:
-        cases = [
-            evaluate_case(Path(tmp) / spec["name"], spec)
-            for spec in json.loads(CORPUS.read_text(encoding="utf-8"))
-        ]
-    output = {"policy": "recall-v1", "synthetic_only": True, "cases": cases}
-    if args.benchmark:
-        output["benchmark"] = benchmark()
-    print(json.dumps(output, indent=2))
-    return 0 if all(case["passed"] for case in cases) else 1
+    parser.add_argument("--benchmark", action="store_true", help="Run the synthetic benchmark")
+    parser.add_argument("--sizes", type=int, nargs="+", default=[32, 128, 256, 1024])
+    parser.add_argument("--repeats", type=int, default=3)
+    args = parser.parse_args()
+    if not args.benchmark or args.repeats < 1 or any(size < 1 for size in args.sizes):
+        parser.error("Use --benchmark with positive sizes and repeats")
+    print(json.dumps({"engine": "classic-v067", "results": benchmark(args.sizes, args.repeats)}, indent=2))
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

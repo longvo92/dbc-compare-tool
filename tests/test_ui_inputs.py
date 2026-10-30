@@ -418,7 +418,7 @@ class GuiInputTests(unittest.TestCase):
                         self.assertEqual({(row["Old Signal Name"], row["New Signal Name"]) for row in rows},
                                          set(pairs.items()))
                         self.assertTrue(all(row["Change Type"] == "Renamed" for row in rows))
-                        self.assertTrue(all(row["Confidence Level"] in {"Low", "Medium"} and row["Review Required"] == "Yes" for row in rows))
+                        self.assertTrue(all(row["Confidence Level"] in {"Low", "Medium"} for row in rows))
                         self.assertNotIn("Changed Properties", workbook.sheetnames)
                         for row in rows:
                             prop, value = row["Changed Properties"].split(": ")
@@ -618,6 +618,7 @@ class GuiInputTests(unittest.TestCase):
             self.assertEqual(cli_main(["--old", str(old), "--new", str(new), "--out", str(cli_path)]), 3)
         self.window.old_input.setText(str(old))
         self.window.new_input.setText(str(new))
+        self.window.input_mode.setCurrentIndex(0)
         gui_path = self.root / "gui.xlsx"
         self.window.output_input.setText(str(gui_path))
         with patch(f"{_UI}.QMessageBox.critical") as error:
@@ -626,7 +627,6 @@ class GuiInputTests(unittest.TestCase):
         error.assert_not_called()
         self.assertIn("Report incomplete", self.window.run_status.text())
         self.assertIn("2 file errors", self.window.run_status.text())
-        self.assertIn(f"{result.review_count} pairs require review", self.window.run_status.text())
         def contents(path):
             wb = load_workbook(path)
             try:
