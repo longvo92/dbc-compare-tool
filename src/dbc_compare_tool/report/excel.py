@@ -87,15 +87,6 @@ def _append(sheet, values):
     sheet.append(values)
 
 
-def _review_rows(result):
-    # Include every competing edge, even if it is far below the selected score.
-    selected_review = [p for p in result.pairings if p.requires_review]
-    involved = {(p.old, p.new) for p in selected_review}
-    involved.update((a, b) for p in selected_review for a, b, _ in p.competitors)
-    pairs = [p for p in result.pairing_candidates if (p.old, p.new) in involved or not p.selected]
-    return sorted(pairs + result.move_suggestions, key=lambda p: p.pair_id)
-
-
 def default_report_path(new_path: Path) -> Path:
     """Place an automatically named report beside the new baseline file/folder."""
     name = new_path.stem if new_path.is_file() else new_path.name
@@ -103,10 +94,9 @@ def default_report_path(new_path: Path) -> Path:
 
 
 def write_excel_report(result: ComparisonResult, output_path: Path) -> Path:
-    review = _review_rows(result)
-    for count in (len(result.message_changes), len(result.signal_changes), len(result.file_pairs), len(review)):
+    for count in (len(result.message_changes), len(result.signal_changes), len(result.file_pairs)):
         if count + 1 > EXCEL_MAX_ROWS:
-            raise ReportExportError("Excel row limit exceeded; all eligible review candidates must be exported")
+            raise ReportExportError("Excel row limit exceeded")
     workbook = Workbook()
     summary_sheet = workbook.active
     summary_sheet.title = "Summary"
@@ -124,20 +114,6 @@ def write_excel_report(result: ComparisonResult, output_path: Path) -> Path:
     _format_summary(summary_sheet)
     _format_detail_sheet(message_sheet, change_col=2, conf_score_col=6, conf_level_col=7)
     _format_detail_sheet(signal_sheet, change_col=4, conf_score_col=7, conf_level_col=8)
-
-    if review:
-        sheet = workbook.create_sheet("Pairing Review")
-        _append(sheet, ["Pair ID", "Category", "Entity", "OLD Identity", "NEW Identity", "OLD DBC Path", "NEW DBC Path",
-                      "OLD Parent", "NEW Parent", "Similarity", "Confidence Score", "Confidence Level",
-                      "Selected", "Review Required", "Reason"])
-        for pair in review:
-            _append(sheet, [pair.pair_id, pair.category, (pair.old or pair.new).kind,
-                pair.old.display() if pair.old else "", pair.new.display() if pair.new else "",
-                pair.old.dbc_path if pair.old else "", pair.new.dbc_path if pair.new else "",
-                str(pair.old.parent) if pair.old else "", str(pair.new.parent) if pair.new else "",
-                pair.similarity, pair.confidence, pair.confidence_level,
-                "Yes" if pair.selected else "No", "Yes" if pair.requires_review else "No", "; ".join(pair.evidence)])
-        _format_detail_sheet(sheet, change_col=2, conf_score_col=11, conf_level_col=12)
 
     for sheet in workbook:
         if sheet.max_row > EXCEL_MAX_ROWS:
@@ -180,8 +156,6 @@ def _write_summary(sheet, result: ComparisonResult) -> None:
     _append(sheet, ["Parse Errors (skipped DBCs)", len(result.diagnostics)])
     _append(sheet, ["Completeness", result.completeness])
     _append(sheet, ["Matching Policy", result.policy_version])
-    _append(sheet, ["Pairs Requiring Review", result.review_count])
-    _append(sheet, ["Confidence", "Heuristic; review competing candidates and parent uncertainty"])
     for group, counts in result.coverage.items():
         text = "; ".join(f"{key}: {counts.get(key, 0)}" for key in ("paired", "unmatched", "not compared"))
         if "unknown" in counts:
@@ -230,7 +204,6 @@ def _write_message_details(sheet, changes: list[Change]) -> None:
         "Match Reason",
         *_CONTEXT_HEADERS[1:],
         "Changed Properties",
-        "Pair ID", "Review Required",
     ])
     for change in changes:
         can_id, transmitter, receivers = _context_values(change)
@@ -246,8 +219,6 @@ def _write_message_details(sheet, changes: list[Change]) -> None:
             transmitter,
             receivers,
             _changed_properties(change),
-            change.pairing.pair_id if change.pairing else "",
-            "Yes" if change.pairing and change.pairing.requires_review else "No",
         ])
 
 
@@ -264,7 +235,6 @@ def _write_signal_details(sheet, changes: list[Change]) -> None:
         "Match Reason",
         *_CONTEXT_HEADERS,
         "Changed Properties",
-        "Pair ID", "Review Required",
     ])
     for change in changes:
         _append(sheet, [
@@ -278,8 +248,6 @@ def _write_signal_details(sheet, changes: list[Change]) -> None:
             _match_reason(change),
             *_context_values(change, signal=True),
             _changed_properties(change),
-            change.pairing.pair_id if change.pairing else "",
-            "Yes" if change.pairing and change.pairing.requires_review else "No",
         ])
 
 
@@ -340,6 +308,10 @@ def _format_summary(sheet) -> None:
 def _format_overview_sheet(sheet) -> None:
     header_fill = PatternFill("solid", fgColor=_HEADER_BG)
     header_font = Font(color=_HEADER_FG, bold=True, size=11)
+    status_fills = {status: PatternFill("solid", fgColor=color)
+                    for status, color in _STATUS_FILL.items()}
+    default_fill = PatternFill("solid", fgColor="FFFFFF")
+    body_alignment = Alignment(wrap_text=True, vertical="top")
 
     for cell in sheet[1]:
         cell.fill = header_fill
@@ -353,10 +325,10 @@ def _format_overview_sheet(sheet) -> None:
 
     for row_idx, row in enumerate(sheet.iter_rows(min_row=2), start=2):
         status = str(row[0].value or "")
-        row_fill = PatternFill("solid", fgColor=_STATUS_FILL.get(status, "FFFFFF"))
+        row_fill = status_fills.get(status, default_fill)
         for cell in row:
             cell.fill = row_fill
-            cell.alignment = Alignment(wrap_text=True, vertical="top")
+            cell.alignment = body_alignment
             cell.border = _BORDER
         sheet.row_dimensions[row_idx].height = 18
 
@@ -374,6 +346,14 @@ def _format_detail_sheet(
 ) -> None:
     header_fill = PatternFill("solid", fgColor=_HEADER_BG)
     header_font = Font(color=_HEADER_FG, bold=True, size=11)
+    row_fills = {kind: PatternFill("solid", fgColor=color)
+                 for kind, color in _CHANGE_ROW_FILL.items()}
+    default_fill = PatternFill("solid", fgColor="FFFFFF")
+    confidence_fills = {level: PatternFill("solid", fgColor=color)
+                        for level, color in _CONF_FILL.items()}
+    body_alignment = Alignment(wrap_text=True, vertical="top")
+    centered_alignment = Alignment(horizontal="center", vertical="top")
+    bold_font = Font(bold=True)
 
     for cell in sheet[1]:
         cell.fill = header_fill
@@ -387,24 +367,23 @@ def _format_detail_sheet(
 
     for row in sheet.iter_rows(min_row=2):
         change_type = str(row[change_col - 1].value or "")
-        row_bg = _CHANGE_ROW_FILL.get(change_type, "FFFFFF")
-        row_fill = PatternFill("solid", fgColor=row_bg)
+        row_fill = row_fills.get(change_type, default_fill)
 
         for cell in row:
             cell.fill = row_fill
-            cell.alignment = Alignment(wrap_text=True, vertical="top")
+            cell.alignment = body_alignment
             cell.border = _BORDER
 
         # Highlight confidence level cell individually
         conf_cell = row[conf_level_col - 1]
         conf_level = str(conf_cell.value or "")
         if conf_level in _CONF_FILL:
-            conf_cell.fill = PatternFill("solid", fgColor=_CONF_FILL[conf_level])
-            conf_cell.font = Font(bold=True)
-            conf_cell.alignment = Alignment(horizontal="center", vertical="top")
+            conf_cell.fill = confidence_fills[conf_level]
+            conf_cell.font = bold_font
+            conf_cell.alignment = centered_alignment
 
         # Center-align confidence score
-        row[conf_score_col - 1].alignment = Alignment(horizontal="center", vertical="top")
+        row[conf_score_col - 1].alignment = centered_alignment
 
     # Auto-width columns (capped at 60)
     for col_cells in sheet.columns:
@@ -460,7 +439,11 @@ def _match_reason(change: Change) -> str:
     """Retain rename evidence without copying technical property changes."""
     if change.change_type != "Renamed":
         return ""
-    return "; ".join(change.pairing.evidence) if change.pairing else ""
+    marker = "Matched by: "
+    for line in reversed(change.description.splitlines()):
+        if line.startswith(marker):
+            return line[len(marker):]
+    return ""
 
 
 def _message_receivers(message: Message | None) -> str:

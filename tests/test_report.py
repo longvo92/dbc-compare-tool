@@ -46,10 +46,10 @@ class BaselineReportTests(unittest.TestCase):
         self.workbook = load_workbook(self.output)
         self.addCleanup(self.workbook.close)
 
-    def test_workbook_includes_pairing_review_after_existing_sheets(self):
+    def test_workbook_contains_only_comparison_sheets(self):
         self.assertEqual(
             self.workbook.sheetnames,
-            ["Summary", "DBC Overview", "Message Details", "Signal Details", "Pairing Review"],
+            ["Summary", "DBC Overview", "Message Details", "Signal Details"],
         )
 
     def test_summary_total_matches_the_result(self):
@@ -81,7 +81,6 @@ class BaselineReportTests(unittest.TestCase):
         context = {"CAN ID", "ECU Node Tx", "ECU Node Rx"}
         shared = {
             "DBC File", "Change Type", "Confidence Score", "Confidence Level", "Match Reason", "Changed Properties",
-            "Pair ID", "Review Required",
         } | context
         expected = {
             "Message Details": shared | {"Old Message Name", "New Message Name"},

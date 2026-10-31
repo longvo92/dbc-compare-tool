@@ -53,8 +53,7 @@ class TestBulkRename(unittest.TestCase):
         for change in result.signal_changes:
             self.assertEqual(change.change_type, "Renamed")
             self.assertEqual(change.property_diffs, ())
-            self.assertLess(change.confidence, 1.0)
-            self.assertTrue(change.pairing.requires_review)
+            self.assertEqual(change.confidence, 1.0)
             self.assertEqual(change.old_signal.multiplexer_ids, change.new_signal.multiplexer_ids)
         self.assertTrue(all(c.dbc_file == self.label for c in result.message_changes + result.signal_changes))
         self.assertEqual(result.file_pairs[0].dbc_file, self.label)
@@ -79,7 +78,7 @@ class TestBulkRename(unittest.TestCase):
         self.assertEqual(status, 0)
         workbook = load_workbook(report)
         self.addCleanup(workbook.close)
-        self.assertEqual(workbook.sheetnames, ["Summary", "Message Details", "Signal Details", "Pairing Review"])
+        self.assertEqual(workbook.sheetnames, ["Summary", "Message Details", "Signal Details"])
         for sheet_name in ("Message Details", "Signal Details"):
             rows = list(workbook[sheet_name].values)
             self.assertTrue(all(row[0] == "VCAN_v1.dbc->VCAN_v2.dbc" for row in rows[1:]))

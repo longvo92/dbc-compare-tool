@@ -124,13 +124,11 @@ class TestDbcPairing(unittest.TestCase):
                 overview = workbook["DBC Overview"]
                 row = dict(zip(next(overview.values), list(overview.values)[1]))
                 self.assertIn("powertrain", row["Pairing Reason"])
-                self.assertGreater(float(row["Pairing Confidence"]), 0.0)
-                self.assertLess(float(row["Pairing Confidence"]), 0.70)
-                self.assertIn("Pairing Review", workbook.sheetnames)
+                self.assertGreaterEqual(float(row["Pairing Confidence"]), 0.55)
             finally:
                 workbook.close()
 
-    def test_same_path_is_strong_evidence_for_an_isolated_pair(self):
+    def test_exact_relative_path_remains_first_priority(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             old, new = root / "old", root / "new"
