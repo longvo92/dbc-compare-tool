@@ -306,6 +306,9 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
                     old_scores[old_index].append((new_index, score))
                     new_scores[new_index].append((old_index, score))
 
+        if not candidates:
+            return []
+
         # A whole extra pair outweighs every possible similarity improvement.
         # Transpose to keep the smaller inventory on the Hungarian row axis.
         transpose = len(old_list) > len(new_list)

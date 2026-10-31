@@ -10,6 +10,8 @@ for the procedure.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-31
+
 ### Changed
 
 - Restore the 0.6.7 DBC, message and signal matching order, scoring and thresholds. Unmatched entities are Added/Removed; the competing-candidate and move-suggestion review output is removed.
@@ -18,6 +20,7 @@ for the procedure.
 ### Fixed
 
 - Avoid generating and styling large Pairing Review sheets for unchanged DBCs, restoring practical comparison and export times.
+- Skip unnecessary signal assignment when no rename candidates qualify.
 
 ## [0.7.0] - 2026-10-28
 

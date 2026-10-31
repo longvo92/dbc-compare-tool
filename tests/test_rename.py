@@ -47,6 +47,13 @@ class TestSignalRenameDetector(unittest.TestCase):
         matches = self.detector.match([old], [new])
         self.assertEqual(len(matches), 0)
 
+    def test_no_eligible_candidates_skips_assignment(self):
+        old = [_make_signal(f"Old{i}", start_bit=i * 8) for i in range(64)]
+        new = [_make_signal(f"New{i}", start_bit=4096 + i * 16, length=16) for i in range(64)]
+        with patch("dbc_compare_tool.core.rename._maximum_assignment") as assignment:
+            self.assertEqual(self.detector.match(old, new), [])
+            assignment.assert_not_called()
+
     def test_exact_same_signal_high_confidence(self):
         old = _make_signal("Speed", start_bit=0, length=16, factor=0.01, unit="km/h")
         new = _make_signal("VehicleSpeed", start_bit=0, length=16, factor=0.01, unit="km/h")
