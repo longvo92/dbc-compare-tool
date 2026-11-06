@@ -14,6 +14,9 @@ from unittest.mock import PropertyMock, patch
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
+from functools import partial
+
+from dbc_compare_tool.i18n import reason_text, translate
 from dbc_compare_tool.core.comparator import DbcComparator, filter_result
 from dbc_compare_tool.core.models import Change, ComparisonResult, FilePairSummary
 from dbc_compare_tool.report.excel import (
@@ -240,7 +243,9 @@ class ReportRowLimitTests(unittest.TestCase):
             Worksheet, "max_row", new_callable=PropertyMock,
             side_effect=AssertionError("Bulk row insertion must not scan existing cells"),
         ):
-            _write_signal_details(workbook.active, self.signal_changes(1000))
+            _write_signal_details(
+                workbook.active, self.signal_changes(1000), partial(translate, "en"), partial(reason_text, "en"),
+            )
         self.assertEqual(workbook.active.max_row, 1001)
         self.assertEqual(workbook.active.cell(1001, 6).value, "Signal999")
 
@@ -285,13 +290,31 @@ class DefaultReportPathTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             new_file = Path(tmp) / "CAN network.v2.DBC"
             new_file.touch()
-            self.assertEqual(default_report_path(new_file), Path(tmp) / "compared_CAN network.v2.xlsx")
+            old_file = Path(tmp) / "Mạng cũ.v1.dbc"
+            old_file.touch()
+            self.assertEqual(
+                default_report_path(old_file, new_file), Path(tmp) / "compared_Mạng cũ.v1_vs_CAN network.v2.xlsx",
+            )
 
     def test_folder_report_preserves_full_folder_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             new_folder = Path(tmp) / "baseline.v2.dbc"
             new_folder.mkdir()
-            self.assertEqual(default_report_path(new_folder), Path(tmp) / "compared_baseline.v2.dbc.xlsx")
+            old_folder = Path(tmp) / "baseline.v1.dbc"
+            old_folder.mkdir()
+            self.assertEqual(
+                default_report_path(old_folder, new_folder), Path(tmp) / "compared_baseline.v1.dbc_vs_baseline.v2.dbc.xlsx",
+            )
+
+    def test_same_filename_uses_distinguishing_ancestor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [Path(tmp) / version / "CAN" / "Bus.dbc" for version in ("Release_A", "Release_B")]
+            for path in paths:
+                path.parent.mkdir(parents=True)
+                path.touch()
+            self.assertEqual(
+                default_report_path(*paths), paths[1].parent / "compared_Release_A_CAN_Bus_vs_Release_B_CAN_Bus.xlsx",
+            )
 
 
 if __name__ == "__main__":

@@ -21,6 +21,10 @@ The `classic-v067` pipeline matches same-relative-path files first, then conside
 
 ## Report
 
+ECU discovery lists declared and routed nodes on each side and records skipped folder DBCs. `apply_ecu_focus(result, nodes)` filters message and signal rows after matching using their original OLD/NEW route context and one step of ECU pairing. The comparison result retains both baselines, readable node sets and full coverage. In focus mode, DBC Overview is restricted again after any change-type filter.
+
+`write_excel_report(result, output_path, *, language="en")` localizes only report presentation. Status, confidence and metric styling use the original keys. Matching evidence retains English string compatibility and carries template parameters for localized output. `default_report_path(old_path, new_path)` includes both baseline names and returns an output beside NEW. Callers that depended on the previous one-argument helper or default filename must provide both paths or supply an explicit output path.
+
 Direct-file reports contain Summary, Message Details and Signal Details. Folder reports add DBC Overview. Include Unchanged emits unchanged detail rows; normal mode emits only changes. Summary includes completeness, inventory coverage and parse diagnostics. Excel row/text limits fail explicitly. Export writes a sibling temporary workbook and replaces the destination only after a successful save, preserving an existing report on failure. String cells are written literally.
 
 ## Verification

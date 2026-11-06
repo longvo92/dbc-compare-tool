@@ -8,6 +8,7 @@ from typing import Generic, Iterable, Protocol, TypeVar
 from dbc_compare_tool.core.ecu import receivers_match, transmitters_match
 from dbc_compare_tool.core.models import Message, Signal, jaccard
 from dbc_compare_tool.core.pairing import _maximum_assignment
+from dbc_compare_tool.core.reasons import MatchReason
 
 
 T = TypeVar("T")
@@ -103,7 +104,7 @@ class GreedyRenameDetector(Generic[T]):
                 # whose threshold sits below the Medium floor (event-like
                 # signals at 0.65), the floor alone could otherwise raise it.
                 reduced_confidence = min(reduced_confidence, candidate.confidence)
-                new_reasons = list(candidate.reasons) + [f"Ambiguous: {rivals} rival matches for this item"]
+                new_reasons = list(candidate.reasons) + [MatchReason("Ambiguous: {count} rival matches for this item", count=rivals)]
                 adjusted_candidates.append(RenameMatch(
                     old=candidate.old,
                     new=candidate.new,
@@ -191,7 +192,7 @@ class MessageRenameDetector(GreedyRenameDetector[Message]):
         layout_score = jaccard(old.signal_layout(), new.signal_layout())
         if layout_score:
             score += 0.22 * layout_score
-            reasons.append(f"Signal layout {layout_score:.0%} matched")
+            reasons.append(MatchReason("Signal layout {overlap:.0%} matched", overlap=layout_score))
 
         name_score = _name_similarity(old.name, new.name)
         score += 0.05 * name_score
@@ -335,7 +336,8 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
                 margin = score - max(rivals)
                 penalty = min(0.35, max(0.0, 0.20 - margin))
                 confidence = max(0.0, confidence - penalty)
-                reasons += (f"Ambiguous: {len(rivals)} competing pair(s), score margin {margin:.2f}",)
+                reasons += (MatchReason("Ambiguous: {count} competing pair(s), score margin {margin:.2f}",
+                                         count=len(rivals), margin=margin),)
             reasons += ("Heuristic signal pairing; review recommended",)
             # Match the level to the score users see in the Excel report.
             confidence = round(confidence, 2)
@@ -380,7 +382,7 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
             reasons.append("Names are similar")
         if old.start_bit != new.start_bit:
             score += 0.15 * self._start_bit_similarity(old, new)
-            reasons.append(f"Start bit shifted by {abs(old.start_bit - new.start_bit)} bit(s)")
+            reasons.append(MatchReason("Start bit shifted by {shift} bit(s)", shift=abs(old.start_bit - new.start_bit)))
         return min(score, 1.0), tuple(reasons)
 
     def _score_for_event_message(self, old: Signal, new: Signal) -> tuple[float, tuple[str, ...]]:
@@ -417,7 +419,7 @@ class SignalRenameDetector(GreedyRenameDetector[Signal]):
             reasons.append("Names have some similarity")
         if old.start_bit != new.start_bit:
             score += 0.06 * self._start_bit_similarity(old, new)
-            reasons.append(f"Start bit shifted by {abs(old.start_bit - new.start_bit)} bit(s)")
+            reasons.append(MatchReason("Start bit shifted by {shift} bit(s)", shift=abs(old.start_bit - new.start_bit)))
 
         # Event message warning
         reasons_list = list(reasons)

@@ -33,7 +33,7 @@ class TestCliPaths(unittest.TestCase):
             )
 
             self.assertEqual(exit_code, 0)
-            self.assertTrue((root / "compared_new baseline.xlsx").is_file())
+            self.assertTrue((root / "compared_old baseline_vs_new baseline.xlsx").is_file())
 
 
 if __name__ == "__main__":

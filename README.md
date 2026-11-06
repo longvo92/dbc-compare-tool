@@ -69,9 +69,11 @@ From the repository folder, start the GUI with `.\run_gui.bat`, or run the CLI:
 ```
 
 - Pass two folders or two `.dbc` files. Quote paths containing spaces.
-- Omit `--out` to save beside NEW as `compared_<name>.xlsx`.
+- Omit `--out` to save beside NEW as `compared_<old>_vs_<new>.xlsx`. Set `--out` for scripts that require a fixed name.
 - Add `--include-unchanged` to include the full inventory.
-- Add `--ecu-pair OLD=NEW` for renamed ECU nodes; repeat for multiple pairs.
+- Add `--ecu-pair OLD=NEW` for renamed ECU nodes. Repeat for multiple pairs.
+- Use `--list-ecus` to scan both inputs, then repeat `--ecu-focus NODE` for the nodes you want in the report. Focus includes Tx and signal-level Rx on either baseline.
+- Use `--report-language vi` for a Vietnamese Excel report. In the GUI, choose the display and report languages independently.
 
 ## Review the results
 
@@ -80,12 +82,13 @@ From the repository folder, start the GUI with `.\run_gui.bat`, or run the CLI:
 - Folder parse errors produce an **Incomplete** report with OLD/NEW paths and causes. Unreadable counts are **Unknown**; a valid file whose fixed manual counterpart failed is **Not compared**. Direct-file parse errors stop export.
 - Message names and frame keys must be unique per DBC; signal names must be unique per message. Duplicate entities are rejected, including in the database API.
 - Saved manual mappings are respected, including **Removed** rows. Message/signal moves across parents appear as Added/Removed.
-- CLI exit codes: `0` complete, `1` parse/processing/export failure, `2` invalid input/mapping, **`3` report exported but incomplete**. Update scripts that previously treated partial reports as success.
+- CLI exit codes: `0` complete, `1` parse/processing/export failure, `2` invalid input/mapping, **`3` export or ECU scan completed with skipped DBCs**. Update scripts that previously treated partial reports as success.
 - **Unchanged** describes an item's own properties. Its parent or children may still change. Synthetic regression results do not establish production matching accuracy.
 
 ## Documentation
 
 - [User Guide](resources/help/user_guide.md) — basic GUI, CLI and Excel usage
+- [Hướng dẫn tiếng Việt](resources/help/user_guide_vi.md)
 - [Architecture](docs/architecture.md) — components, matching rules, testing and builds
 - [Changelog](CHANGELOG.md) — release notes
 

@@ -2,7 +2,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtWidgets import QComboBox, QLineEdit
+from PySide6.QtWidgets import QComboBox, QDialogButtonBox, QLineEdit
+
+from dbc_compare_tool.i18n import translate
+
+
+def dialog_buttons(language: str, *buttons: QDialogButtonBox.StandardButton) -> QDialogButtonBox:
+    labels = {
+        QDialogButtonBox.StandardButton.Save: "Save",
+        QDialogButtonBox.StandardButton.Cancel: "Cancel",
+        QDialogButtonBox.StandardButton.Close: "Close",
+    }
+    box = QDialogButtonBox()
+    for button in buttons:
+        box.addButton(button).setText(translate(language, labels[button]))
+    return box
 
 
 class NoWheelComboBox(QComboBox):
@@ -27,10 +41,10 @@ class DropLineEdit(QLineEdit):
         # a horizontal scrollbar onto every layout it sits in.
         self.setMinimumWidth(160)
 
-    def set_files_mode(self, enabled: bool) -> None:
+    def set_files_mode(self, enabled: bool, language: str = "en") -> None:
         self._files_mode = enabled
-        kind = "DBC file" if enabled else "folder"
-        self.setPlaceholderText(f"Browse or drag & drop a {kind} here")
+        key = "Browse or drag & drop a DBC file here" if enabled else "Browse or drag & drop a folder here"
+        self.setPlaceholderText(translate(language, key))
 
     def _accepts_path(self, path: Path) -> bool:
         if self._files_mode:

@@ -14,13 +14,14 @@ from openpyxl import load_workbook
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtCore import QSettings, QTimer
+    from PySide6.QtCore import QSettings, Qt, QTimer
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QDialog
 except ImportError:
     HAS_QT = False
 else:
     HAS_QT = True
+    from dbc_compare_tool.ui.ecu_focus import EcuFocusDialog
     from dbc_compare_tool.ui.main_window import (
         CompareWorker,
         EcuDiscoveryWorker,
@@ -213,6 +214,110 @@ class GuiInputTests(unittest.TestCase):
                     self.assertTrue(row[f"New {entity} Name"])
                     self.assertNotEqual(row[f"Old {entity} Name"], row[f"New {entity} Name"])
         self.assertTrue({"Added", "Removed", "Renamed"}.issubset(kinds))
+
+    def test_language_preference_and_report_language_are_independent(self):
+        self._files()
+        self._save_maps()
+        self.window._focus_nodes = {"Receiver"}
+        self.window.gui_language.setCurrentIndex(self.window.gui_language.findData("vi"))
+        self.assertEqual(self.window.run_button.text(), "Chạy so sánh")
+        self.assertEqual(self.window.old_input.text(), str(self.old))
+        self.assertEqual(self.window._saved_ecu_map, {"OldNode": "NewNode"})
+        self.assertEqual(self.window._focus_nodes, {"Receiver"})
+        for gui, report, summary in (
+            ("vi", "gui", "Tổng quan"), ("vi", "en", "Summary"),
+            ("en", "vi", "Tổng quan"), ("en", "gui", "Summary"),
+        ):
+            with self.subTest(gui=gui, report=report):
+                self.window.gui_language.setCurrentIndex(self.window.gui_language.findData(gui))
+                self.window.report_language.setCurrentIndex(self.window.report_language.findData(report))
+                output = self.root / f"{gui}_{report}.xlsx"
+                self.window.output_input.setText(str(output))
+                self.window._run_compare()
+                self.assertFalse(self.window.gui_language.isEnabled())
+                self.assertFalse(self.window.report_language.isEnabled())
+                self._wait_until(lambda: self.window.run_button.isEnabled())
+                workbook = load_workbook(output)
+                try:
+                    self.assertEqual(workbook.sheetnames[0], summary)
+                finally:
+                    workbook.close()
+
+        self.window.gui_language.setCurrentIndex(self.window.gui_language.findData("vi"))
+        self.window.report_language.setCurrentIndex(self.window.report_language.findData("en"))
+        with patch(f"{_UI}.QSettings", return_value=self.settings):
+            restored = MainWindow()
+        self.addCleanup(restored.deleteLater)
+        self.assertEqual(restored.gui_language.currentData(), "vi")
+        self.assertEqual(restored.report_language.currentData(), "en")
+        self.assertEqual(restored.run_button.text(), "Chạy so sánh")
+        self.assertEqual(restored.new_input.text(), str(self.new))
+
+    def test_focus_scan_exports_same_rows_as_cli_and_clears_stale_selection(self):
+        from contextlib import redirect_stderr, redirect_stdout
+        from io import StringIO
+
+        from dbc_compare_tool.cli import main
+
+        self._files()
+        self._save_maps()
+        self.new.write_text(self.new.read_text(encoding="utf-8").replace("(1,0)", "(2,0)"), encoding="utf-8")
+
+        def choose_receiver(dialog):
+            self.assertFalse(self.window.gui_language.isEnabled())
+            items = [dialog.nodes.item(index) for index in range(dialog.nodes.count())]
+            self.assertTrue(any("OLD OldNode → NEW NewNode" in item.text() for item in items))
+            dialog._search("receiver")
+            dialog._select_visible()
+            self.assertEqual(dialog.selected_nodes(), {"Receiver"})
+            return QDialog.DialogCode.Accepted
+
+        with patch.object(EcuFocusDialog, "exec", choose_receiver):
+            self.window.focus_checkbox.setChecked(True)
+            self.assertIsInstance(self.window.ecu_worker, EcuDiscoveryWorker)
+            self._wait_until(lambda: self.window.run_button.isEnabled())
+        self.assertEqual(self.window.focus_hint.text(), "Receiver")
+        self.window.report_language.setCurrentIndex(self.window.report_language.findData("vi"))
+        gui_path, cli_path = self.root / "gui.xlsx", self.root / "cli.xlsx"
+        self.window.output_input.setText(str(gui_path))
+        self.window._run_compare()
+        self._wait_until(lambda: self.window.run_button.isEnabled())
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            self.assertEqual(main([
+                "--old", str(self.old), "--new", str(self.new), "--out", str(cli_path),
+                "--ecu-pair", "OldNode=NewNode", "--ecu-focus", "Receiver", "--report-language", "vi",
+            ]), 0)
+        gui, cli = load_workbook(gui_path), load_workbook(cli_path)
+        try:
+            details = "Chi tiết signal"
+            self.assertEqual(list(gui[details].values), list(cli[details].values))
+            self.assertEqual(gui[details].max_row, 2)
+        finally:
+            gui.close()
+            cli.close()
+
+        with patch(f"{_UI}.EcuPairingDialog") as pairing:
+            pairing.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            pairing.return_value.pair_map.return_value = {}
+            self.window._open_ecu_pairing()
+            self._wait_until(lambda: self.window.run_button.isEnabled())
+        self.assertEqual(self.window._focus_nodes, set())
+        with patch(f"{_UI}.QMessageBox.warning") as warning:
+            self.window._run_compare()
+            warning.assert_called_once()
+        self.window._focus_nodes = {"Receiver"}
+        self.window.old_input.setText(str(self.new))
+        self.assertEqual(self.window._focus_nodes, set())
+        self.assertIn("compared_new_vs_new.xlsx", self.window.output_input.placeholderText())
+        self.assertEqual(self.window.output_input.text(), str(gui_path))
+
+    def test_focus_selector_can_clear_and_show_node_side(self):
+        dialog = EcuFocusDialog(self.window, ["OldNode"], ["NewNode"], {"OldNode": "NewNode"}, {"OldNode"})
+        self.assertEqual(dialog.selected_nodes(), {"OldNode"})
+        self.assertIn("[NEW]", dialog.nodes.item(0).text())
+        self.assertEqual(dialog.nodes.item(1).checkState(), Qt.CheckState.Checked)
+        dialog._clear()
+        self.assertEqual(dialog.selected_nodes(), set())
 
     def test_ecu_discovery_runs_in_worker_and_saves_selected_mapping(self):
         self._files()

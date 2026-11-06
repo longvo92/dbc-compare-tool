@@ -99,7 +99,7 @@ class TestFileInputs(unittest.TestCase):
         status, output, error = self._cli("--ecu-pair", "OLD=NEW", "--include-unchanged")
         self.assertEqual((status, error), (0, ""))
         self.assertIn("Total changes: 0", output)
-        report = self.root / "compared_omega input.xlsx"
+        report = self.root / "compared_alpha input_vs_omega input.xlsx"
         self.assertTrue(report.is_file())
         workbook = load_workbook(report)
         self.addCleanup(workbook.close)

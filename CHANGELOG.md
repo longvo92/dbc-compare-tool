@@ -10,6 +10,15 @@ for the procedure.
 
 ## [Unreleased]
 
+### Added
+
+- Choose English or Vietnamese independently for the GUI and Excel report.
+- Focus on Tx/Rx changes for selected ECU nodes. Discover nodes and apply the same focus from the CLI.
+
+### Changed
+
+- Name automatic reports `compared_<old>_vs_<new>.xlsx` and record both baseline paths in Summary.
+
 ## [0.7.1] - 2026-10-31
 
 ### Changed

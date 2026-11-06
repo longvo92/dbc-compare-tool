@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-from datetime import datetime
-from pathlib import Path
+import hashlib
 import os
+import re
 import tempfile
+from datetime import datetime
+from functools import partial
+from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from dbc_compare_tool.core.models import Change, ComparisonResult, FilePairSummary, Message
+from dbc_compare_tool.i18n import LANGUAGES, reason_text, translate
 from dbc_compare_tool.report._style import BORDER, HEADER_BG, HEADER_FG
 
 
@@ -87,33 +91,70 @@ def _append(sheet, values):
     sheet.append(values)
 
 
-def default_report_path(new_path: Path) -> Path:
-    """Place an automatically named report beside the new baseline file/folder."""
-    name = new_path.stem if new_path.is_file() else new_path.name
-    return new_path.parent / f"compared_{name}.xlsx"
+def _safe_baseline_name(name: str) -> str:
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .") or "root"
 
 
-def write_excel_report(result: ComparisonResult, output_path: Path) -> Path:
+def _shorten_baseline_name(name: str) -> str:
+    encoded = name.encode("utf-8", errors="replace")
+    if len(encoded) <= 100:
+        return name
+    digest = hashlib.sha256(encoded).hexdigest()[:10]
+    return encoded[:89].decode("utf-8", errors="ignore") + "_" + digest
+
+
+def default_report_path(old_path: Path, new_path: Path) -> Path:
+    """Use both baseline names and place the report beside NEW."""
+    old_path, new_path = Path(old_path), Path(new_path)
+    paths = [Path(os.path.abspath(path)) for path in (old_path, new_path)]
+    labels = [
+        _safe_baseline_name(path.stem if not path.is_dir() and path.suffix.lower() == ".dbc" else path.name)
+        for path in paths
+    ]
+    if labels[0].casefold() == labels[1].casefold() and paths[0] != paths[1]:
+        qualified = labels[:]
+        for old_parent, new_parent in zip(paths[0].parents, paths[1].parents):
+            qualified = [
+                f"{_safe_baseline_name(parent.name or parent.anchor)}_{label}"
+                for parent, label in zip((old_parent, new_parent), qualified)
+            ]
+            if qualified[0].casefold() != qualified[1].casefold():
+                break
+        if qualified[0].casefold() == qualified[1].casefold():
+            qualified = [
+                f"{label}_{hashlib.sha256(os.fsencode(path)).hexdigest()[:10]}"
+                for label, path in zip(labels, paths)
+            ]
+        labels = qualified
+    old_name, new_name = map(_shorten_baseline_name, labels)
+    return new_path.parent / f"compared_{old_name}_vs_{new_name}.xlsx"
+
+
+def write_excel_report(result: ComparisonResult, output_path: Path, *, language: str = "en") -> Path:
+    if language not in LANGUAGES:
+        raise ValueError(f"Unsupported report language: {language}")
+    tr = partial(translate, language)
+    render_reason = partial(reason_text, language)
     for count in (len(result.message_changes), len(result.signal_changes), len(result.file_pairs)):
         if count + 1 > EXCEL_MAX_ROWS:
             raise ReportExportError("Excel row limit exceeded")
     workbook = Workbook()
     summary_sheet = workbook.active
-    summary_sheet.title = "Summary"
+    summary_sheet.title = tr("Summary")
     if not result.is_file_comparison:
-        overview_sheet = workbook.create_sheet("DBC Overview")
-        _write_overview(overview_sheet, result.file_pairs)
-        _format_overview_sheet(overview_sheet)
-    message_sheet = workbook.create_sheet("Message Details")
-    signal_sheet = workbook.create_sheet("Signal Details")
+        overview_sheet = workbook.create_sheet(tr("DBC Overview"))
+        _write_overview(overview_sheet, result.file_pairs, tr, render_reason, bool(result.focus_nodes))
+        _format_overview_sheet(overview_sheet, result.file_pairs)
+    message_sheet = workbook.create_sheet(tr("Message Details"))
+    signal_sheet = workbook.create_sheet(tr("Signal Details"))
 
-    _write_summary(summary_sheet, result)
-    _write_message_details(message_sheet, result.message_changes)
-    _write_signal_details(signal_sheet, result.signal_changes)
+    summary_keys = _write_summary(summary_sheet, result, tr)
+    _write_message_details(message_sheet, result.message_changes, tr, render_reason)
+    _write_signal_details(signal_sheet, result.signal_changes, tr, render_reason)
 
-    _format_summary(summary_sheet)
-    _format_detail_sheet(message_sheet, change_col=2, conf_score_col=6, conf_level_col=7)
-    _format_detail_sheet(signal_sheet, change_col=4, conf_score_col=7, conf_level_col=8)
+    _format_summary(summary_sheet, summary_keys, result.completeness)
+    _format_detail_sheet(message_sheet, result.message_changes, conf_score_col=6, conf_level_col=7)
+    _format_detail_sheet(signal_sheet, result.signal_changes, conf_score_col=7, conf_level_col=8)
 
     for sheet in workbook:
         if sheet.max_row > EXCEL_MAX_ROWS:
@@ -141,59 +182,78 @@ def write_excel_report(result: ComparisonResult, output_path: Path) -> Path:
 # Writers
 # ---------------------------------------------------------------------------
 
-def _write_summary(sheet, result: ComparisonResult) -> None:
+def _write_summary(sheet, result: ComparisonResult, tr) -> list[str]:
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
-    _append(sheet, ["DBC Compare Tool  —  Comparison Report", generated])
-    _append(sheet, [])                                           # blank separator
-    _append(sheet, ["Metric", "Count"])
+    _append(sheet, [tr("DBC Compare Tool  —  Comparison Report"), generated])
+    _append(sheet, [])
+    _append(sheet, [tr("Metric"), tr("Count")])
+    keys: list[str] = []
+
+    def row(key: str, value=None, *, caption: str | None = None) -> None:
+        keys.append(key)
+        _append(sheet, [tr(key) if caption is None else caption, value])
+
     summary = result.summary()
     for metric in SUMMARY_ORDER:
-        _append(sheet, [metric, summary.get(metric, 0)])
+        row(metric, summary.get(metric, 0))
     for metric in summary:
         if metric not in SUMMARY_ORDER:
-            _append(sheet, [metric, summary[metric]])
-    _append(sheet, ["Report Mode", "Include Unchanged" if result.include_unchanged else "Changes only"])
-    _append(sheet, ["Parse Errors (skipped DBCs)", len(result.diagnostics)])
-    _append(sheet, ["Completeness", result.completeness])
-    _append(sheet, ["Matching Policy", result.policy_version])
+            row(metric, summary[metric])
+    row("Report Mode", tr("Include Unchanged" if result.include_unchanged else "Changes only"))
+    row("Parse Errors (skipped DBCs)", len(result.diagnostics))
+    row("Completeness", tr(result.completeness))
+    row("Matching Policy", result.policy_version)
+    if result.old_path is not None:
+        row("Old Baseline", str(result.old_path))
+    if result.new_path is not None:
+        row("New Baseline", str(result.new_path))
+    if result.focus_nodes:
+        row("ECU Focus", ", ".join(result.focus_nodes))
+        row("Focus Scope", tr("Tx/Rx on either baseline"))
+        for old, new in result.focus_pairs:
+            row("Focus ECU Pair", _fmt_transition(old, new))
+        if not summary["Total Changes"]:
+            row("No changes in focus")
+        row("Coverage Scope", tr("Entire input"))
     for group, counts in result.coverage.items():
-        text = "; ".join(f"{key}: {counts.get(key, 0)}" for key in ("paired", "unmatched", "not compared"))
+        details = [f"{tr(key)}: {counts.get(key, 0)}" for key in ("paired", "unmatched", "not compared")]
         if "unknown" in counts:
-            text += "; unreadable entities: Unknown"
-        _append(sheet, [f"Coverage {group}", text])
+            details.append(tr("unreadable entities: Unknown"))
+        row("Coverage", "; ".join(details), caption=tr("Coverage {group}", group=group))
     for diagnostic in result.diagnostics:
-        _append(sheet, [f"Parse Error {diagnostic.side} {diagnostic.path}", diagnostic.reason])
-    if result.ecu_map:
-        _append(sheet, [])
-        _append(sheet, ["ECU Node"])
+        row("Parse Error", diagnostic.reason, caption=f"{tr('Parse Error')} {diagnostic.side} {diagnostic.path}")
+    if result.ecu_map and not result.focus_nodes:
+        row("")
+        row("ECU Node")
         for old_node, new_node in sorted(result.ecu_map.items()):
-            _append(sheet, [_fmt_transition(old_node, new_node)])
+            row("", caption=str(_fmt_transition(old_node, new_node)))
+    return keys
 
 
-def _write_overview(sheet, file_pairs: list[FilePairSummary]) -> None:
-    _append(sheet, [
+def _write_overview(sheet, file_pairs: list[FilePairSummary], tr, render_reason, focused: bool) -> None:
+    _append(sheet, [tr(key) for key in (
         "Status",
         "Path",
         "Pairing Confidence",
-        "Messages",
-        "Signals",
+        "Messages (whole DBC)" if focused else "Messages",
+        "Signals (whole DBC)" if focused else "Signals",
         "Pairing Reason",
-    ])
+    )])
     for fp in file_pairs:
         _append(sheet, [
-            fp.status,
+            tr(fp.status),
             _fmt_transition(fp.old_path, fp.new_path, change_type=fp.status),
             _fmt_confidence(fp.pairing_confidence),
-            _fmt_transition(fp.message_count_old if fp.message_count_old is not None else "Unknown",
-                            fp.message_count_new if fp.message_count_new is not None else "Unknown", change_type=fp.status),
-            _fmt_transition(fp.signal_count_old if fp.signal_count_old is not None else "Unknown",
-                            fp.signal_count_new if fp.signal_count_new is not None else "Unknown", change_type=fp.status),
-            "; ".join(fp.pairing_reasons),
+            _fmt_transition(fp.message_count_old if fp.message_count_old is not None else tr("Unknown"),
+                            fp.message_count_new if fp.message_count_new is not None else tr("Unknown"), change_type=fp.status),
+            _fmt_transition(fp.signal_count_old if fp.signal_count_old is not None else tr("Unknown"),
+                            fp.signal_count_new if fp.signal_count_new is not None else tr("Unknown"), change_type=fp.status),
+            "; ".join(map(render_reason, fp.pairing_reasons)),
         ])
 
 
-def _write_message_details(sheet, changes: list[Change]) -> None:
-    _append(sheet, [
+def _write_message_details(sheet, changes: list[Change], tr, render_reason) -> None:
+    _append(sheet, [tr(key) for key in (
         "DBC File",
         "Change Type",
         "Old Message Name",
@@ -204,26 +264,26 @@ def _write_message_details(sheet, changes: list[Change]) -> None:
         "Match Reason",
         *_CONTEXT_HEADERS[1:],
         "Changed Properties",
-    ])
+    )])
     for change in changes:
         can_id, transmitter, receivers = _context_values(change)
         _append(sheet, [
             _dbc_label(change.dbc_file),
-            change.change_type,
+            tr(change.change_type),
             change.old_name,
             change.new_name,
             can_id or _fmt_can_id(change.can_id),
             _fmt_confidence(change.confidence),
-            change.confidence_level,
-            _match_reason(change),
+            tr(change.confidence_level),
+            _match_reason(change, render_reason),
             transmitter,
             receivers,
             _changed_properties(change),
         ])
 
 
-def _write_signal_details(sheet, changes: list[Change]) -> None:
-    _append(sheet, [
+def _write_signal_details(sheet, changes: list[Change], tr, render_reason) -> None:
+    _append(sheet, [tr(key) for key in (
         "DBC File",
         "Parent Message (Old)",
         "Parent Message (New)",
@@ -235,17 +295,17 @@ def _write_signal_details(sheet, changes: list[Change]) -> None:
         "Match Reason",
         *_CONTEXT_HEADERS,
         "Changed Properties",
-    ])
+    )])
     for change in changes:
         _append(sheet, [
             _dbc_label(change.dbc_file),
             *_parent_message_names(change),
-            change.change_type,
+            tr(change.change_type),
             change.old_name,
             change.new_name,
             _fmt_confidence(change.confidence),
-            change.confidence_level,
-            _match_reason(change),
+            tr(change.confidence_level),
+            _match_reason(change, render_reason),
             *_context_values(change, signal=True),
             _changed_properties(change),
         ])
@@ -255,7 +315,7 @@ def _write_signal_details(sheet, changes: list[Change]) -> None:
 # Formatters
 # ---------------------------------------------------------------------------
 
-def _format_summary(sheet) -> None:
+def _format_summary(sheet, keys: list[str], completeness: str) -> None:
     # Row 1 — report title
     title_cell = sheet.cell(row=1, column=1)
     title_cell.font = Font(bold=True, size=13, color="1F4E78")
@@ -277,8 +337,7 @@ def _format_summary(sheet) -> None:
     sheet.row_dimensions[3].height = 22
 
     # Rows 4+ — metric data
-    for row_idx in range(4, sheet.max_row + 1):
-        metric = sheet.cell(row_idx, 1).value
+    for row_idx, metric in enumerate(keys, start=4):
         row = sheet[row_idx]
         bg = _SUMMARY_METRIC_FILL.get(metric, "FFFFFF")
         fill = PatternFill("solid", fgColor=bg)
@@ -293,7 +352,7 @@ def _format_summary(sheet) -> None:
             for cell in row:
                 cell.fill = header_fill
                 cell.font = header_font
-        if metric == "Completeness" and sheet.cell(row_idx, 2).value == "Incomplete":
+        if metric == "Completeness" and completeness == "Incomplete":
             for cell in row:
                 cell.fill = PatternFill("solid", fgColor="FFC7CE")
                 cell.font = Font(bold=True, color="9C0006")
@@ -305,7 +364,7 @@ def _format_summary(sheet) -> None:
     sheet.freeze_panes = "A4"
 
 
-def _format_overview_sheet(sheet) -> None:
+def _format_overview_sheet(sheet, pairs: list[FilePairSummary]) -> None:
     header_fill = PatternFill("solid", fgColor=_HEADER_BG)
     header_font = Font(color=_HEADER_FG, bold=True, size=11)
     status_fills = {status: PatternFill("solid", fgColor=color)
@@ -323,9 +382,8 @@ def _format_overview_sheet(sheet) -> None:
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
 
-    for row_idx, row in enumerate(sheet.iter_rows(min_row=2), start=2):
-        status = str(row[0].value or "")
-        row_fill = status_fills.get(status, default_fill)
+    for row_idx, (row, pair) in enumerate(zip(sheet.iter_rows(min_row=2), pairs), start=2):
+        row_fill = status_fills.get(pair.status, default_fill)
         for cell in row:
             cell.fill = row_fill
             cell.alignment = body_alignment
@@ -340,7 +398,7 @@ def _format_overview_sheet(sheet) -> None:
 
 def _format_detail_sheet(
     sheet,
-    change_col: int,
+    changes: list[Change],
     conf_score_col: int,
     conf_level_col: int,
 ) -> None:
@@ -365,9 +423,8 @@ def _format_detail_sheet(
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
 
-    for row in sheet.iter_rows(min_row=2):
-        change_type = str(row[change_col - 1].value or "")
-        row_fill = row_fills.get(change_type, default_fill)
+    for row, change in zip(sheet.iter_rows(min_row=2), changes):
+        row_fill = row_fills.get(change.change_type, default_fill)
 
         for cell in row:
             cell.fill = row_fill
@@ -376,7 +433,7 @@ def _format_detail_sheet(
 
         # Highlight confidence level cell individually
         conf_cell = row[conf_level_col - 1]
-        conf_level = str(conf_cell.value or "")
+        conf_level = change.confidence_level
         if conf_level in _CONF_FILL:
             conf_cell.fill = confidence_fills[conf_level]
             conf_cell.font = bold_font
@@ -435,10 +492,13 @@ def _parent_message_names(change: Change) -> tuple[str, str]:
     )
 
 
-def _match_reason(change: Change) -> str:
+def _match_reason(change: Change, render_reason) -> str:
     """Retain rename evidence without copying technical property changes."""
     if change.change_type != "Renamed":
         return ""
+    if change.match_reasons:
+        return ", ".join(map(render_reason, change.match_reasons))
+    # Results constructed by external callers may still provide only description.
     marker = "Matched by: "
     for line in reversed(change.description.splitlines()):
         if line.startswith(marker):
