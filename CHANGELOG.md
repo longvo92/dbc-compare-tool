@@ -17,6 +17,8 @@ for the procedure.
 
 ### Changed
 
+- Export all change types from the GUI and make checkbox states easier to distinguish.
+- Show only published releases in **Help → Release note**.
 - Name automatic reports `compared_<old>_vs_<new>.xlsx` and record both baseline paths in Summary.
 
 ## [0.7.1] - 2026-10-31

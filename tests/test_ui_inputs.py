@@ -17,7 +17,7 @@ try:
     from PySide6.QtCore import QSettings, Qt, QTimer
     from PySide6.QtGui import QColor, QPalette
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QGroupBox, QLabel, QScrollArea
+    from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QGroupBox, QLabel, QScrollArea
 except ImportError:
     HAS_QT = False
 else:
@@ -180,14 +180,19 @@ class GuiInputTests(unittest.TestCase):
         self.assertTrue(self.window.progress.isHidden())
 
     def test_gui_export_splits_names_and_omits_added_removed_arrows(self):
+        self.assertCountEqual(
+            self.window.centralWidget().findChildren(QCheckBox),
+            [self.window.chk_include_unchanged, self.window.focus_checkbox],
+        )
         old_folder, new_folder = self.root / "old", self.root / "new"
         old_folder.mkdir()
         new_folder.mkdir()
         old_dbc = _DBC.format(sender="Controller") + ' SG_ Removed : 8|8@1+ (1,0) [0|255] "" Receiver\n'
         new_dbc = _DBC.format(sender="Controller").replace("Status:", "StatusNew:").replace("Counter :", "CounterNew :")
         new_dbc += ' SG_ Added : 32|32@0- (0.01,-100) [-100|100] "degC" Spare\n'
-        (old_folder / "bus.dbc").write_text(old_dbc, encoding="utf-8")
-        (new_folder / "bus.dbc").write_text(new_dbc, encoding="utf-8")
+        fixed_signal = ' SG_ StableName : 16|8@1+ (1,0) [0|255] "" Receiver\n'
+        (old_folder / "bus.dbc").write_text(old_dbc + fixed_signal, encoding="utf-8")
+        (new_folder / "bus.dbc").write_text(new_dbc + fixed_signal.replace("(1,0)", "(2,0)"), encoding="utf-8")
         self.window.old_input.setText(str(old_folder))
         self.window.new_input.setText(str(new_folder))
         report = self.root / "hotfix.xlsx"
@@ -215,7 +220,7 @@ class GuiInputTests(unittest.TestCase):
                     self.assertTrue(row[f"Old {entity} Name"])
                     self.assertTrue(row[f"New {entity} Name"])
                     self.assertNotEqual(row[f"Old {entity} Name"], row[f"New {entity} Name"])
-        self.assertTrue({"Added", "Removed", "Renamed"}.issubset(kinds))
+        self.assertEqual(kinds, {"Added", "Removed", "Modified", "Renamed"})
 
     def test_language_dialog_is_in_settings_before_help_and_respects_cancel(self):
         self.assertEqual([action.text() for action in self.window.menuBar().actions()], ["Settings", "Help"])
@@ -242,6 +247,19 @@ class GuiInputTests(unittest.TestCase):
         self.assertEqual(self.window.run_button.text(), "Chạy so sánh")
         self.assertEqual(self.settings.value("gui_language"), "vi")
         self.assertEqual(self.settings.value("report_language"), "en")
+
+    def test_release_note_menu_hides_development_notes(self):
+        help_menu = self.window.menuBar().actions()[1].menu()
+        action = next(item for item in help_menu.actions() if item.text() == "Release note")
+        changelog = self.root / "CHANGELOG.md"
+        released = "## [2.0.0] — 2026-11-06\n\nPublic note.\n\n## [1.0.0] - 2026-10-01\n\nOlder note.\n"
+        preamble = "# Changelog\n\nMaintainer instructions.\n\n## [Unreleased]\n\nDevelopment notes.\n\n"
+        with patch(f"{_UI}._changelog_path", return_value=changelog):
+            for content, visible in ((preamble + released, released), (preamble, "No release notes available.")):
+                changelog.write_text(content, encoding="utf-8")
+                with patch.object(self.window, "_show_markdown") as show:
+                    action.trigger()
+                show.assert_called_once_with("Release note", visible)
 
     def test_dark_system_palette_does_not_leak_into_workspace(self):
         previous_palette = self.app.palette()

@@ -133,7 +133,7 @@ VI = {
     "Language…": "Ngôn ngữ…",
     "Help": "Trợ giúp",
     "User Guide": "Hướng dẫn sử dụng",
-    "Changelog": "Lịch sử cập nhật",
+    "Release note": "Ghi chú phát hành",
     "About": "Giới thiệu",
     "GUI Language": "Ngôn ngữ GUI",
     "Report Language": "Ngôn ngữ report",
@@ -163,10 +163,8 @@ VI = {
     "Automatic: {path}": "Tự động: {path}",
     "Automatic: beside NEW as compared_<old>_vs_<new>.xlsx":
         "Tự động: lưu cạnh NEW với tên compared_<old>_vs_<new>.xlsx",
-    "Change types": "Loại thay đổi",
-    "Change-type filters are ignored.": "Không áp dụng bộ lọc loại thay đổi.",
-    "Export every message and signal, including unchanged entries. Change-type filters are ignored in this mode.":
-        "Xuất cả message và signal không đổi. Chế độ này bỏ qua bộ lọc loại thay đổi.",
+    "Include unchanged messages and signals within the current ECU scope.":
+        "Xuất cả message và signal không đổi trong phạm vi ECU hiện tại.",
     "Compare two DBC files directly in Files mode. In Folders mode, use saved manual mapping, including Removed rows; otherwise use automatic matching. Saved ECU pairing applies in either mode.":
         "Chế độ File so sánh trực tiếp hai file DBC. Chế độ Folder dùng cặp đã lưu, kể cả mục đánh dấu đã xóa, hoặc tự động ghép cặp. Ghép cặp ECU áp dụng cho cả hai chế độ.",
     "Manual Pairing…": "Ghép cặp DBC thủ công…",
@@ -232,8 +230,6 @@ VI = {
     "Excel (*.xlsx)": "Excel (*.xlsx)",
     "Invalid Output": "Output không hợp lệ",
     "Report path must end with .xlsx.": "Đường dẫn report phải có đuôi .xlsx.",
-    "No Filter Selected": "Chưa chọn loại thay đổi",
-    "Select at least one change type to include.": "Chọn ít nhất một loại thay đổi để xuất.",
     "Comparison Failed": "So sánh thất bại",
     "Report Not Found": "Không tìm thấy report",
     "The report file no longer exists. Run the comparison again.":
@@ -241,6 +237,7 @@ VI = {
     "Comparison Running": "Đang so sánh",
     "A comparison is still running. Quit anyway?": "Tool vẫn đang so sánh. Bạn có muốn thoát không?",
     "Unable to open help file: {error}": "Không mở được file trợ giúp: {error}",
-    "Unable to open the changelog: {error}": "Không mở được changelog: {error}",
+    "Unable to open the release notes: {error}": "Không mở được ghi chú phát hành: {error}",
+    "No release notes available.": "Chưa có ghi chú phát hành.",
     "DBC Compare Tool": "DBC Compare Tool",
 }

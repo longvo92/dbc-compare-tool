@@ -7,7 +7,7 @@
 3. Optional: in folder mode, use **Manual Pairing…** to force DBC pairs or mark OLD files **Removed**. Saved mappings override automatic matching, including Removed rows. Unlisted OLD files are removed; unreferenced NEW files are added.
 4. In **ECU Pairing…**, select nodes to rename; leave other nodes at **Keep original name**. Original names remain in the report.
 5. Enable **ECU Focus** to scan both inputs, then check the nodes to include. Use **Select ECUs…** to edit the selection. Changing the inputs or the ECU mapping clears the selected nodes.
-6. Choose change types, or enable **Include Unchanged**. This bypasses change-type filters within the current ECU scope.
+6. The report includes all change types within the current ECU scope. Enable **Include Unchanged** to also list unchanged messages and signals.
 7. Click **Run Compare**. Export is automatic; then click **Open Report**.
 
 The finished status shows file errors and pairs requiring review. **Report incomplete** means some inputs could not be compared; zero changes in that report does not establish equality.

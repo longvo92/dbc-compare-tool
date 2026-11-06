@@ -7,7 +7,7 @@
 3. Để trống đường dẫn report để lưu cạnh NEW với tên `compared_<old>_vs_<new>.xlsx`. Tên tự động dùng tên folder hoặc tên file bỏ đuôi `.dbc`. Chọn đường dẫn `.xlsx` nếu muốn đặt tên riêng.
 4. Trong chế độ Folder, dùng **Ghép cặp DBC thủ công…** khi cần chọn cặp cụ thể hoặc đánh dấu file OLD đã xóa. Dùng **Ghép cặp ECU…** để ghép các node đã đổi tên. Report giữ tên node gốc.
 5. Bật **ECU focus** để quét node trong hai baseline. Chọn một hoặc nhiều node. Dùng **Chọn ECU…** để sửa danh sách. Đổi input hoặc cặp ECU sẽ xóa lựa chọn focus.
-6. Chọn loại thay đổi. **Gồm mục không đổi** bỏ qua bộ lọc loại thay đổi và vẫn áp dụng ECU focus.
+6. Report gồm tất cả loại thay đổi trong phạm vi ECU hiện tại. Bật **Gồm mục không đổi** để xuất thêm các message và signal không đổi.
 7. Chọn **Chạy so sánh** rồi **Mở report**.
 
 ## ECU focus và report

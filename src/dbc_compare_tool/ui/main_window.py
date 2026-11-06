@@ -36,12 +36,13 @@ from PySide6.QtWidgets import (
 )
 
 from dbc_compare_tool import __version__
-from dbc_compare_tool.core.comparator import DbcComparator, filter_result
+from dbc_compare_tool.core.comparator import DbcComparator
 from dbc_compare_tool.core.discovery import collect_dbc_files
 from dbc_compare_tool.core.ecu import scan_ecu_inputs, validate_ecu_map
 from dbc_compare_tool.core.focus import apply_ecu_focus
 from dbc_compare_tool.core.models import ComparisonResult, Diagnostic
 from dbc_compare_tool.i18n import LANGUAGES, translate
+from dbc_compare_tool.release_notes import published_release_notes
 from dbc_compare_tool.report.excel import default_report_path, write_excel_report
 from dbc_compare_tool.ui.ecu_focus import EcuFocusDialog
 from dbc_compare_tool.ui.widgets import DropLineEdit, NoWheelComboBox, dialog_buttons
@@ -54,11 +55,7 @@ def _resource_path(filename: str) -> Path:
 
 
 def _changelog_path() -> Path:
-    """CHANGELOG.md lives at the repository root, which no build ships.
-
-    scripts/build.py copies it in beside the other resources, so a build finds
-    it there; a source checkout falls back to the root copy itself.
-    """
+    """Use packaged release history, or the full changelog in a source checkout."""
     bundled = _resource_path("CHANGELOG.md")
     if bundled.is_file():
         return bundled
@@ -593,18 +590,10 @@ class MainWindow(QMainWindow):
         self._saved_ecu_inputs: tuple[str, str, str] | None = None
         self._ecu_load_inputs: tuple[str, str, str] | None = None
 
-        # Filter checkboxes
-        self.chk_added = self._text_widget(QCheckBox, "Added")
-        self.chk_removed = self._text_widget(QCheckBox, "Removed")
-        self.chk_modified = self._text_widget(QCheckBox, "Modified")
-        self.chk_renamed = self._text_widget(QCheckBox, "Renamed")
-        for chk in (self.chk_added, self.chk_removed, self.chk_modified, self.chk_renamed):
-            chk.setChecked(True)
         self.chk_include_unchanged = self._text_widget(QCheckBox, "Include Unchanged")
         self._bind_text(
             self.chk_include_unchanged.setToolTip,
-            "Export every message and signal, including unchanged entries. "
-            "Change-type filters are ignored in this mode."
+            "Include unchanged messages and signals within the current ECU scope."
         )
 
         self._build_menu()
@@ -700,17 +689,17 @@ class MainWindow(QMainWindow):
 
         help_menu = self.menuBar().addMenu("Help")
         user_guide_action = help_menu.addAction("User Guide")
-        changelog_action = help_menu.addAction("Changelog")
+        release_note_action = help_menu.addAction("Release note")
         about_action = help_menu.addAction("About")
         self._bind_text(help_menu.setTitle, "Help")
-        for action, key in ((user_guide_action, "User Guide"), (changelog_action, "Changelog"), (about_action, "About")):
+        for action, key in ((user_guide_action, "User Guide"), (release_note_action, "Release note"), (about_action, "About")):
             self._bind_text(action.setText, key)
         user_guide_action.triggered.connect(
             lambda: self._show_help_document(
                 "User Guide", "help/user_guide_vi.md" if self._gui_language == "vi" else "help/user_guide.md",
             )
         )
-        changelog_action.triggered.connect(self._show_changelog)
+        release_note_action.triggered.connect(self._show_release_note)
         about_action.triggered.connect(lambda: self._show_help_document(
             "About", "help/about_vi.md" if self._gui_language == "vi" else "help/about.md",
         ))
@@ -803,27 +792,13 @@ class MainWindow(QMainWindow):
         report_form.addWidget(self.chk_include_unchanged, 1, 0, 1, 3)
         self._browse_buttons = (old_button, new_button, output_button)
 
-        filter_layout = QHBoxLayout()
-        filter_layout.setSpacing(10)
-        filter_label = self._text_widget(QLabel, "Change types")
-        filter_label.setObjectName("hintLabel")
-        filter_layout.addWidget(filter_label)
-        for chk in (self.chk_added, self.chk_removed, self.chk_modified, self.chk_renamed):
-            filter_layout.addWidget(chk)
-        filter_layout.addStretch()
-        report_form.addLayout(filter_layout, 2, 0, 1, 3)
-        self.report_hint = self._text_widget(QLabel, "Change-type filters are ignored.")
-        self.report_hint.setObjectName("hintLabel")
-        self.report_hint.setWordWrap(True)
-        self.report_hint.setVisible(False)
-        report_form.addWidget(self.report_hint, 3, 0, 1, 3)
         focus_row = QHBoxLayout()
         focus_row.setSpacing(12)
         focus_row.addWidget(self.focus_checkbox)
         focus_row.addWidget(self.focus_button)
         focus_row.addStretch()
-        report_form.addLayout(focus_row, 4, 0, 1, 3)
-        report_form.addWidget(self.focus_hint, 5, 0, 1, 3)
+        report_form.addLayout(focus_row, 2, 0, 1, 3)
+        report_form.addWidget(self.focus_hint, 3, 0, 1, 3)
 
         # Action buttons
         self.run_button.setObjectName("primaryButton")
@@ -888,15 +863,13 @@ class MainWindow(QMainWindow):
             self.input_mode,
             self.old_input, old_button, self.new_input, new_button,
             self.manual_pair_button, self.ecu_pair_button, self.output_input, output_button,
-            self.chk_include_unchanged, self.chk_added, self.chk_removed,
-            self.chk_modified, self.chk_renamed, self.focus_checkbox, self.focus_button,
+            self.chk_include_unchanged, self.focus_checkbox, self.focus_button,
             self.run_button, self.open_button,
         )
         for first, second in zip(focus_order, focus_order[1:]):
             QWidget.setTabOrder(first, second)
 
     def _wire_events(self) -> None:
-        self.chk_include_unchanged.toggled.connect(self._update_change_filters)
         self.run_button.clicked.connect(self._run_compare)
         self.manual_pair_button.clicked.connect(self._open_manual_pairing)
         self.ecu_pair_button.clicked.connect(self._open_ecu_pairing)
@@ -1150,18 +1123,6 @@ class MainWindow(QMainWindow):
         self.output_input.setPlaceholderText(hint)
         self.output_input.setToolTip(hint)
 
-    def _selected_change_types(self) -> set[str]:
-        types: set[str] = set()
-        if self.chk_added.isChecked():
-            types.add("Added")
-        if self.chk_removed.isChecked():
-            types.add("Removed")
-        if self.chk_modified.isChecked():
-            types.add("Modified")
-        if self.chk_renamed.isChecked():
-            types.add("Renamed")
-        return types
-
     def _complete_manual_pairing(self) -> dict[str, str | None] | None:
         """Honor saved mappings for these inputs, including explicit Removed rows."""
         pair_map = self._saved_pair_map
@@ -1189,11 +1150,6 @@ class MainWindow(QMainWindow):
         output_path = Path(output_text) if output_text else default_report_path(old_folder, new_folder)
         if output_path.suffix.lower() != ".xlsx":
             QMessageBox.warning(self, self._tr("Invalid Output"), self._tr("Report path must end with .xlsx."))
-            return
-
-        selected = self._selected_change_types()
-        if not selected and not self.chk_include_unchanged.isChecked():
-            QMessageBox.warning(self, self._tr("No Filter Selected"), self._tr("Select at least one change type to include."))
             return
 
         focus_nodes = self._focus_nodes if self.focus_checkbox.isChecked() else set()
@@ -1243,16 +1199,8 @@ class MainWindow(QMainWindow):
         self.chk_include_unchanged.setEnabled(enabled)
         for control in (self.old_input, self.new_input, self.output_input, *self._browse_buttons):
             control.setEnabled(enabled)
-        self._update_change_filters()
-
-    def _update_change_filters(self) -> None:
-        enabled = self.run_button.isEnabled() and not self.chk_include_unchanged.isChecked()
-        for chk in (self.chk_added, self.chk_removed, self.chk_modified, self.chk_renamed):
-            chk.setEnabled(enabled)
-        self.report_hint.setVisible(self.chk_include_unchanged.isChecked())
 
     def _on_compared(self, result: ComparisonResult) -> None:
-        result = filter_result(result, self._selected_change_types())
         self._set_status("Writing Excel report…")
         self.export_worker = ExportWorker(
             result, self._pending_output_path, language=self._pending_report_language,
@@ -1351,13 +1299,14 @@ class MainWindow(QMainWindow):
             return
         self._show_markdown(title, content)
 
-    def _show_changelog(self) -> None:
+    def _show_release_note(self) -> None:
+        title = self._tr("Release note")
         try:
-            content = _changelog_path().read_text(encoding="utf-8")
-        except OSError as exc:
-            QMessageBox.critical(self, self._tr("Changelog"), self._tr("Unable to open the changelog: {error}", error=exc))
+            content = published_release_notes(_changelog_path().read_text(encoding="utf-8"))
+        except (OSError, UnicodeError) as exc:
+            QMessageBox.critical(self, title, self._tr("Unable to open the release notes: {error}", error=exc))
             return
-        self._show_markdown(self._tr("Changelog"), content)
+        self._show_markdown(title, content or self._tr("No release notes available."))
 
     def _show_markdown(self, title: str, content: str) -> None:
         content = content.replace("{version}", __version__)
@@ -1417,6 +1366,34 @@ QComboBox::down-arrow {
     height: 6px;
 }
 """.replace("ARROW_PATH", arrow.as_posix())
+    check = _resource_path("checkbox-check.svg")
+    if check.is_file() and not QPixmap(str(check)).isNull():
+        stylesheet += """
+QCheckBox::indicator, QListWidget::indicator {
+    width: 15px;
+    height: 15px;
+    border: 1px solid #64748b;
+    border-radius: 3px;
+    background-color: #ffffff;
+}
+QCheckBox::indicator:unchecked:hover, QListWidget::indicator:unchecked:hover {
+    border-color: #2563eb;
+    background-color: #eff6ff;
+}
+QCheckBox::indicator:checked, QListWidget::indicator:checked {
+    border-color: #1d4ed8;
+    background-color: #1d4ed8;
+    image: url("CHECK_PATH");
+}
+QCheckBox::indicator:disabled, QListWidget::indicator:disabled {
+    border-color: #94a3b8;
+    background-color: #f1f5f9;
+}
+QCheckBox::indicator:checked:disabled, QListWidget::indicator:checked:disabled {
+    border-color: #64748b;
+    background-color: #64748b;
+}
+""".replace("CHECK_PATH", check.as_posix())
     app.setStyleSheet(stylesheet)
 
 
