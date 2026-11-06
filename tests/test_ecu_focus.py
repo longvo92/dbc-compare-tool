@@ -38,6 +38,26 @@ BO_ 100 Status: 8 Tx
 
 
 class EcuFocusTests(unittest.TestCase):
+    def test_focus_keeps_routes_from_all_accumulated_databases(self):
+        comparator = DbcComparator()
+        old = Message("Status", 100, 8, "A")
+        new = replace(old, transmitter="B")
+        result = comparator.compare_databases("first.dbc", database(old), database(new))
+        comparator.compare_databases(
+            "second.dbc",
+            replace(database(new), path=Path("second.dbc")),
+            replace(database(old), path=Path("second.dbc")),
+            result,
+        )
+
+        for node in ("A", "B"):
+            with self.subTest(node=node):
+                focus = apply_ecu_focus(result, [node])
+                self.assertEqual(
+                    [change.dbc_file for change in focus.message_changes],
+                    ["first.dbc", "second.dbc"],
+                )
+
     def test_rx_is_per_signal_and_respects_old_or_new_routes(self):
         signals = [
             signal("LostRx", 0, "Rx"),

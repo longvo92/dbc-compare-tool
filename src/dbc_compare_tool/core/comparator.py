@@ -330,13 +330,10 @@ class DbcComparator:
         validate_database(old_db)
         validate_database(new_db)
         dbc_file = _format_file_pair_label(*dbc_file.split(" -> ", 1))
+        old_nodes, new_nodes = database_ecu_nodes(old_db), database_ecu_nodes(new_db)
         if result is None:
-            old_nodes, new_nodes = database_ecu_nodes(old_db), database_ecu_nodes(new_db)
             validate_ecu_map(self.ecu_map, old_nodes, new_nodes)
-            result = ComparisonResult(
-                old_nodes=old_nodes if present_old else set(),
-                new_nodes=new_nodes if present_new else set(),
-            )
+            result = ComparisonResult()
         result.policy_version = "classic-v067"
         for side, db, present in (("OLD", old_db, present_old), ("NEW", new_db, present_new)):
             if present:
@@ -492,6 +489,10 @@ class DbcComparator:
             if change.old_signal is not None and change.new_signal is not None:
                 result.inventory[_entity("OLD", old_db, change.old_message, change.old_signal)] = "paired"
                 result.inventory[_entity("NEW", new_db, change.new_message, change.new_signal)] = "paired"
+        if present_old:
+            result.old_nodes.update(old_nodes)
+        if present_new:
+            result.new_nodes.update(new_nodes)
         return result
 
     def _compare_signals(
