@@ -133,6 +133,8 @@ class Change:
     new_message: Message | None = None
     old_signal: Signal | None = None
     new_signal: Signal | None = None
+    match_reasons: tuple[str, ...] = ()
+    file_pair_paths: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True, order=True)
@@ -179,6 +181,12 @@ class ComparisonResult:
     diagnostics: list[Diagnostic] = field(default_factory=list)
     inventory: dict[EntityIdentity, str] = field(default_factory=dict)
     policy_version: str = "classic-v067"
+    old_path: Path | None = None
+    new_path: Path | None = None
+    old_nodes: set[str] = field(default_factory=set)
+    new_nodes: set[str] = field(default_factory=set)
+    focus_nodes: tuple[str, ...] = ()
+    focus_pairs: tuple[tuple[str, str], ...] = ()
 
     @property
     def completeness(self) -> str:

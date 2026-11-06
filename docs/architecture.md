@@ -21,6 +21,10 @@ The `classic-v067` pipeline matches same-relative-path files first, then conside
 
 ## Report
 
+ECU discovery lists declared and routed nodes on each side and records skipped folder DBCs. `apply_ecu_focus(result, nodes)` filters message and signal rows after matching using their original OLD/NEW route context and one step of ECU pairing. The comparison result retains both baselines, readable node sets and full coverage. The GUI and CLI export all change types in scope. If a library caller applies a change-type filter, DBC Overview is restricted again in focus mode.
+
+`write_excel_report(result, output_path, *, language="en")` localizes only report presentation. Status, confidence and metric styling use the original keys. Matching evidence retains English string compatibility and carries template parameters for localized output. `default_report_path(old_path, new_path)` includes both baseline names and returns an output beside NEW. Callers that depended on the previous one-argument helper or default filename must provide both paths or supply an explicit output path.
+
 Direct-file reports contain Summary, Message Details and Signal Details. Folder reports add DBC Overview. Include Unchanged emits unchanged detail rows; normal mode emits only changes. Summary includes completeness, inventory coverage and parse diagnostics. Excel row/text limits fail explicitly. Export writes a sibling temporary workbook and replaces the destination only after a successful save, preserving an existing report on failure. String cells are written literally.
 
 ## Verification
@@ -38,4 +42,4 @@ The benchmark prints median parse/compare and export times for 32, 128, 256 and 
 
 ## Build and release
 
-Run `python scripts/build.py` to create the Windows executable and zipapp in `dist/`. `scripts/release_check.py` checks release metadata and changelog consistency. The release workflow builds and smoke-tests artifacts from `main`; publishing requires an explicit release action. Python source GUI use requires the `gui` extra. Maintain matching-policy migration guidance in README and the user guide when changing report semantics.
+Run `python scripts/build.py` to create the Windows executable and zipapp in `dist/`. Both bundles include only dated release history for **Help → Release note**. `scripts/release_check.py` checks release metadata and changelog consistency. The release workflow builds and smoke-tests artifacts from `main`; publishing requires an explicit release action. Python source GUI use requires the `gui` extra. Maintain matching-policy migration guidance in README and the user guide when changing report semantics.

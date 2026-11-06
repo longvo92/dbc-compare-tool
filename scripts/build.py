@@ -22,10 +22,12 @@ import zipapp
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+from dbc_compare_tool.release_notes import published_release_notes  # noqa: E402
+
 SRC_PKG = REPO_ROOT / "src" / "dbc_compare_tool"
 RESOURCES = REPO_ROOT / "resources"
-# Help > Changelog reads this; it lives at the repo root, so every build has to
-# copy it in beside the other resources.
+# Keep development notes in the repository and bundle only the release history.
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 DIST = REPO_ROOT / "dist"
 APP_NAME = "DbcCompareTool"
@@ -70,6 +72,11 @@ def read_version() -> str:
     return match.group(1)
 
 
+def _write_release_history(destination: Path) -> None:
+    history = published_release_notes(CHANGELOG.read_text(encoding="utf-8"))
+    destination.write_text(history, encoding="utf-8")
+
+
 def build_pyz(version: str) -> Path:
     target = DIST / f"{APP_NAME}-{version}.pyzw"
     with tempfile.TemporaryDirectory() as tmp:
@@ -88,7 +95,7 @@ def build_pyz(version: str) -> Path:
     # _resource_path() resolves to the folder containing the .pyzw,
     # so resources/ must sit next to it.
     shutil.copytree(RESOURCES, DIST / "resources", dirs_exist_ok=True)
-    shutil.copy2(CHANGELOG, DIST / "resources" / CHANGELOG.name)
+    _write_release_history(DIST / "resources" / CHANGELOG.name)
     return target
 
 
@@ -96,6 +103,9 @@ def build_exe(version: str) -> Path:
     python = find_python()
     check_build_env(python)
     build_dir = REPO_ROOT / "build" / "pyinstaller"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    release_history = build_dir / CHANGELOG.name
+    _write_release_history(release_history)
     cmd = [
         python,
         "-m",
@@ -113,7 +123,7 @@ def build_exe(version: str) -> Path:
         "--add-data",
         f"{RESOURCES}{_ADD_DATA_SEP}resources",
         "--add-data",
-        f"{CHANGELOG}{_ADD_DATA_SEP}resources",
+        f"{release_history}{_ADD_DATA_SEP}resources",
         "--distpath",
         str(DIST),
         "--workpath",

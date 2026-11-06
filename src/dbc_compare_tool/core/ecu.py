@@ -4,7 +4,7 @@ from collections import Counter
 from pathlib import Path
 
 from dbc_compare_tool.core.discovery import collect_dbc_files
-from dbc_compare_tool.core.models import DbcDatabase
+from dbc_compare_tool.core.models import DbcDatabase, Diagnostic
 from dbc_compare_tool.core.parser import UNDEFINED_NODE, DbcParseError, parse_dbc
 
 
@@ -27,17 +27,34 @@ def validate_dbc_input(path: Path) -> None:
 
 def collect_ecu_nodes(path: Path) -> list[str]:
     """Discover selectable ECU nodes; skip invalid files in folder mode like comparison."""
-    path = Path(path)
+    return _scan_ecu_nodes(Path(path), "")[0]
+
+
+def scan_ecu_inputs(
+    old_path: Path, new_path: Path,
+) -> tuple[list[str], list[str], list[Diagnostic]]:
+    old_path, new_path = Path(old_path), Path(new_path)
+    for path in (old_path, new_path):
+        validate_dbc_input(path)
+    if old_path.is_dir() != new_path.is_dir():
+        raise ValueError("Select two folders or two .dbc files; file/folder inputs cannot be mixed")
+    old_nodes, old_errors = _scan_ecu_nodes(old_path, "OLD")
+    new_nodes, new_errors = _scan_ecu_nodes(new_path, "NEW")
+    return old_nodes, new_nodes, old_errors + new_errors
+
+
+def _scan_ecu_nodes(path: Path, side: str) -> tuple[list[str], list[Diagnostic]]:
     validate_dbc_input(path)
     if path.is_file():
-        return sorted(database_ecu_nodes(parse_dbc(path)))
+        return sorted(database_ecu_nodes(parse_dbc(path))), []
     nodes: set[str] = set()
-    for file_path in collect_dbc_files(path).values():
+    diagnostics: list[Diagnostic] = []
+    for rel, file_path in sorted(collect_dbc_files(path).items()):
         try:
             nodes.update(database_ecu_nodes(parse_dbc(file_path)))
-        except DbcParseError:
-            continue
-    return sorted(nodes)
+        except DbcParseError as exc:
+            diagnostics.append(Diagnostic(side, rel, str(exc)))
+    return sorted(nodes), diagnostics
 
 
 def validate_ecu_map(

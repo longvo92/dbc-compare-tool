@@ -9,6 +9,7 @@ from pathlib import PurePosixPath
 
 from dbc_compare_tool.core.ecu import transmitters_match
 from dbc_compare_tool.core.models import DbcDatabase, Message, jaccard
+from dbc_compare_tool.core.reasons import MatchReason
 
 FILE_RENAME_THRESHOLD = 0.55
 _GENERIC_WORDS = frozenset({
@@ -123,7 +124,8 @@ def _score_database_pair(
         containment = shared / min(old_weight, new_weight)
         overlap = shared / (old_weight + new_weight - shared)
         name_score = 0.65 + 0.20 * containment + 0.15 * overlap
-        reasons.append("Shared DBC keywords: " + ", ".join(sorted(shared_words, key=lambda word: (-weights[word], word))))
+        reasons.append(MatchReason("Shared DBC keywords: {words}",
+                                   words=", ".join(sorted(shared_words, key=lambda word: (-weights[word], word)))))
 
     common_ids = old.frames.keys() & new.frames.keys()
     id_overlap = len(common_ids) / max(len(old.frames), len(new.frames), 1)
@@ -132,11 +134,11 @@ def _score_database_pair(
     similarity = SequenceMatcher(None, old.candidate.relative_path.lower(), new.candidate.relative_path.lower()).ratio()
     content_score = 0.55 * id_overlap + 0.15 * name_overlap + 0.25 * structure * id_overlap + 0.05 * similarity
     if id_overlap:
-        reasons.append(f"DBC CAN ID overlap {id_overlap:.0%}")
+        reasons.append(MatchReason("DBC CAN ID overlap {overlap:.0%}", overlap=id_overlap))
     if name_overlap:
-        reasons.append(f"Message names overlap {name_overlap:.0%}")
+        reasons.append(MatchReason("Message names overlap {overlap:.0%}", overlap=name_overlap))
     if structure:
-        reasons.append(f"Common CAN ID structures {structure:.0%} matched")
+        reasons.append(MatchReason("Common CAN ID structures {overlap:.0%} matched", overlap=structure))
     score = max(content_score, 0.85 * name_score) + 0.10 * min(content_score, name_score)
     return min(score, 1.0), tuple(reasons)
 

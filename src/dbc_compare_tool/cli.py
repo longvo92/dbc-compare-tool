@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 
 from dbc_compare_tool.core.comparator import DbcComparator
+from dbc_compare_tool.core.ecu import scan_ecu_inputs
+from dbc_compare_tool.core.focus import apply_ecu_focus
 from dbc_compare_tool.core.parser import DbcParseError
 from dbc_compare_tool.report.excel import ReportExportError, default_report_path, write_excel_report
 
@@ -46,17 +48,29 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Include unchanged messages and signals in the report",
     )
+    focus = parser.add_mutually_exclusive_group()
+    focus.add_argument(
+        "--ecu-focus", action="append", default=[], metavar="NODE",
+        help="Limit the report to Tx/Rx changes for this ECU node (repeat for multiple nodes)",
+    )
+    focus.add_argument("--list-ecus", action="store_true", help="List OLD and NEW ECU nodes without exporting")
+    parser.add_argument("--report-language", choices=("en", "vi"), default="en", help="Excel report language")
     parser.add_argument(
         "--out",
         nargs="+",
         metavar="PATH",
-        help="Output .xlsx report path (default: beside NEW as compared_<name>.xlsx)",
+        help="Output .xlsx report path (default: beside NEW as compared_<old>_vs_<new>.xlsx)",
     )
     args = parser.parse_args(argv)
 
     old_path = _path_from_parts(args.old)
     new_path = _path_from_parts(args.new)
-    output_path = _path_from_parts(args.out) if args.out else default_report_path(new_path)
+    if args.list_ecus:
+        if args.out or args.ecu_pair or args.include_unchanged or args.report_language != "en":
+            parser.error("--list-ecus cannot be combined with comparison/export options")
+        return _list_ecus(old_path, new_path)
+
+    output_path = _path_from_parts(args.out) if args.out else default_report_path(old_path, new_path)
 
     if output_path.suffix.lower() != ".xlsx":
         print(f"Error: output path must end with .xlsx: {output_path}", file=sys.stderr)
@@ -67,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
         result = DbcComparator(include_unchanged=args.include_unchanged, ecu_map=ecu_map).compare_paths(
             old_path, new_path, progress_callback=print
         )
+        if args.ecu_focus:
+            result = apply_ecu_focus(result, args.ecu_focus)
     except DbcParseError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -78,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        write_excel_report(result, output_path)
+        write_excel_report(result, output_path, language=args.report_language)
     except (OSError, ReportExportError) as exc:
         print(f"Error: unable to write report {output_path}: {exc}", file=sys.stderr)
         return 1
@@ -86,13 +102,34 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: report export failed: {exc}", file=sys.stderr)
         return 1
 
-    for diagnostic in result.diagnostics:
-        print(f"Warning: {diagnostic.side} {diagnostic.path}: {diagnostic.reason}", file=sys.stderr)
+    _warn_diagnostics(result.diagnostics)
 
     print(f"Report written: {output_path}")
     print(f"Total changes: {result.summary()['Total Changes']}")
     print(f"{result.completeness}; policy {result.policy_version}")
     return 3 if result.completeness == "Incomplete" else 0
+
+
+def _list_ecus(old_path: Path, new_path: Path) -> int:
+    try:
+        old, new, diagnostics = scan_ecu_inputs(old_path, new_path)
+    except DbcParseError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except (OSError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    for side, nodes in (("OLD", old), ("NEW", new)):
+        print(f"{side} ECU nodes ({len(nodes)}):")
+        for node in nodes:
+            print(f"  {node}")
+    _warn_diagnostics(diagnostics)
+    return 3 if diagnostics else 0
+
+
+def _warn_diagnostics(diagnostics) -> None:
+    for diagnostic in diagnostics:
+        print(f"Warning: {diagnostic.side} {diagnostic.path}: {diagnostic.reason}", file=sys.stderr)
 
 
 if __name__ == "__main__":

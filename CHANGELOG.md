@@ -10,6 +10,24 @@ for the procedure.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-06
+
+### Added
+
+- Choose English or Vietnamese independently for the GUI and Excel report under **Settings → Language…**.
+- Focus on Tx/Rx changes for selected ECU nodes. Discover nodes and apply the same focus from the CLI.
+
+### Changed
+
+- Export all change types from the GUI and make checkbox states easier to distinguish.
+- Show only published releases in **Help → Release note** and link to the project from **Help → About**.
+- Name automatic reports `compared_<old>_vs_<new>.xlsx` and record both baseline paths in Summary. Scripts can use `--out` to keep a fixed filename. API callers now pass both baseline paths to `default_report_path`.
+
+### Fixed
+
+- Keep ECU Focus results complete when comparing multiple DBC pairs into one result through the API.
+- Keep GUI backgrounds readable under dark system palettes and prevent section titles from overlapping their borders.
+
 ## [0.7.1] - 2026-10-31
 
 ### Changed

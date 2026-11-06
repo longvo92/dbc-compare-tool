@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import os
 import sys
+from functools import partial
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSettings, QThread, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QColor, QIcon, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -24,6 +26,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QProgressBar,
     QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
@@ -33,12 +36,16 @@ from PySide6.QtWidgets import (
 )
 
 from dbc_compare_tool import __version__
-from dbc_compare_tool.core.comparator import DbcComparator, filter_result
+from dbc_compare_tool.core.comparator import DbcComparator
 from dbc_compare_tool.core.discovery import collect_dbc_files
-from dbc_compare_tool.core.ecu import collect_ecu_nodes, validate_ecu_map
-from dbc_compare_tool.core.models import ComparisonResult
+from dbc_compare_tool.core.ecu import scan_ecu_inputs, validate_ecu_map
+from dbc_compare_tool.core.focus import apply_ecu_focus
+from dbc_compare_tool.core.models import ComparisonResult, Diagnostic
+from dbc_compare_tool.i18n import LANGUAGES, translate
+from dbc_compare_tool.release_notes import published_release_notes
 from dbc_compare_tool.report.excel import default_report_path, write_excel_report
-from dbc_compare_tool.ui.widgets import DropLineEdit, NoWheelComboBox
+from dbc_compare_tool.ui.ecu_focus import EcuFocusDialog
+from dbc_compare_tool.ui.widgets import DropLineEdit, NoWheelComboBox, dialog_buttons
 
 
 def _resource_path(filename: str) -> Path:
@@ -48,11 +55,7 @@ def _resource_path(filename: str) -> Path:
 
 
 def _changelog_path() -> Path:
-    """CHANGELOG.md lives at the repository root, which no build ships.
-
-    scripts/build.py copies it in beside the other resources, so a build finds
-    it there; a source checkout falls back to the root copy itself.
-    """
+    """Use packaged release history, or the full changelog in a source checkout."""
     bundled = _resource_path("CHANGELOG.md")
     if bundled.is_file():
         return bundled
@@ -60,7 +63,7 @@ def _changelog_path() -> Path:
 
 
 _STYLESHEET = """
-QMainWindow, QDialog {
+QMainWindow, QDialog, QWidget#workspaceContent, QWidget#workspaceViewport {
     background-color: #f4f6fb;
 }
 QWidget {
@@ -119,19 +122,14 @@ QPushButton#primaryButton {
 QPushButton#primaryButton:hover { background: #1d4fd7; }
 QPushButton#primaryButton:pressed { background: #1a46bd; }
 QPushButton#primaryButton:disabled { background: #a5bdf2; color: #eef2fb; }
-QGroupBox {
+QGroupBox#sectionCard {
     background: #ffffff;
     border: 1px solid #e1e5ee;
     border-radius: 8px;
-    margin-top: 10px;
-    padding: 12px 14px 10px 14px;
-    font-weight: 600;
-    color: #334155;
 }
-QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 12px;
-    padding: 0 4px;
+QLabel#sectionTitle {
+    color: #334155;
+    font-weight: 600;
 }
 QCheckBox {
     spacing: 6px;
@@ -177,6 +175,7 @@ QMenuBar::item {
     border-radius: 4px;
 }
 QMenuBar::item:selected { background: #e3ecfd; }
+QMenuBar::item:disabled { color: #64748b; }
 QMenu {
     background: #ffffff;
     border: 1px solid #d4d9e4;
@@ -192,7 +191,7 @@ QStatusBar {
     background: #eef1f8;
     color: #4b5563;
 }
-QTableWidget {
+QTableWidget, QListWidget {
     background: #ffffff;
     border: 1px solid #e1e5ee;
     border-radius: 6px;
@@ -210,9 +209,10 @@ QComboBox {
     background: #ffffff;
     border: 1px solid #d4d9e4;
     border-radius: 6px;
-    padding: 4px 8px;
+    padding: 5px 28px 5px 9px;
 }
 QComboBox:focus { border: 1px solid #2563eb; }
+QComboBox:disabled { color: #64748b; background: #f1f5f9; }
 QComboBox QAbstractItemView {
     background: #ffffff;
     border: 1px solid #d4d9e4;
@@ -232,10 +232,24 @@ QPlainTextEdit {
     font-size: 9pt;
 }
 QPlainTextEdit:focus { border: 1px solid #2563eb; }
-QScrollArea {
-    background: transparent;
+QScrollArea#workspaceScroll {
+    background: #f4f6fb;
     border: none;
 }
+QScrollArea#workspaceScroll QScrollBar:vertical {
+    background: #f4f6fb;
+    width: 10px;
+}
+QScrollArea#workspaceScroll QScrollBar::handle:vertical {
+    background: #c5cddd;
+    min-height: 28px;
+    border-radius: 4px;
+}
+QScrollArea#workspaceScroll QScrollBar::handle:vertical:hover { background: #9ba9c1; }
+QScrollArea#workspaceScroll QScrollBar::add-line:vertical,
+QScrollArea#workspaceScroll QScrollBar::sub-line:vertical { height: 0; }
+QScrollArea#workspaceScroll QScrollBar::add-page:vertical,
+QScrollArea#workspaceScroll QScrollBar::sub-page:vertical { background: transparent; }
 """
 
 
@@ -244,12 +258,13 @@ def _read_resource_text(filename: str) -> str:
 
 
 def _scrollable(content: QWidget) -> QScrollArea:
-    """Wrap a tab's content so a small window scrolls instead of crushing it."""
+    """Keep the workspace scrollable and give its backing surfaces the app background."""
     scroll = QScrollArea()
+    scroll.setObjectName("workspaceScroll")
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-    scroll.viewport().setAutoFillBackground(False)
-    content.setAutoFillBackground(False)
+    scroll.viewport().setObjectName("workspaceViewport")
+    content.setObjectName("workspaceContent")
     scroll.setWidget(content)
     return scroll
 
@@ -266,6 +281,7 @@ class CompareWorker(QThread):
         pair_map: dict[str, str | None] | None = None,
         include_unchanged: bool = False,
         ecu_map: dict[str, str] | None = None,
+        focus_nodes: set[str] | None = None,
     ) -> None:
         super().__init__()
         self.old_folder = old_folder
@@ -273,6 +289,7 @@ class CompareWorker(QThread):
         self.pair_map = pair_map
         self.include_unchanged = include_unchanged
         self.ecu_map = dict(ecu_map or {})
+        self.focus_nodes = set(focus_nodes or ())
 
     def run(self) -> None:
         try:
@@ -293,6 +310,8 @@ class CompareWorker(QThread):
                     self.pair_map,
                     progress_callback=lambda msg: self.log.emit(msg),
                 )
+            if self.focus_nodes:
+                result = apply_ecu_focus(result, self.focus_nodes)
             self.compared.emit(result)
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -303,15 +322,16 @@ class ExportWorker(QThread):
     completed = Signal(object, object)
     failed = Signal(str)
 
-    def __init__(self, result: ComparisonResult, output_path: Path) -> None:
+    def __init__(self, result: ComparisonResult, output_path: Path, *, language: str = "en") -> None:
         super().__init__()
         self.result = result
         self.output_path = output_path
+        self.language = language
 
     def run(self) -> None:
         try:
             self.log.emit("Writing Excel report...")
-            write_excel_report(self.result, self.output_path)
+            write_excel_report(self.result, self.output_path, language=self.language)
             self.completed.emit(self.output_path, dict(self.result.summary(),
                 completeness=self.result.completeness, parse_error_count=len(self.result.diagnostics)))
         except Exception as exc:
@@ -326,10 +346,12 @@ class EcuDiscoveryWorker(QThread):
         super().__init__()
         self.old_path = old_path
         self.new_path = new_path
+        self.diagnostics: list[Diagnostic] = []
 
     def run(self) -> None:
         try:
-            self.loaded.emit(collect_ecu_nodes(self.old_path), collect_ecu_nodes(self.new_path))
+            old, new, self.diagnostics = scan_ecu_inputs(self.old_path, self.new_path)
+            self.loaded.emit(old, new)
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -343,24 +365,27 @@ class EcuPairingDialog(QDialog):
         old_nodes: list[str],
         new_nodes: list[str],
         previous: dict[str, str] | None = None,
+        *,
+        language: str = "en",
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("ECU Node Pairing")
+        self._tr = partial(translate, language)
+        self.setWindowTitle(self._tr("ECU Node Pairing"))
         self.resize(680, 460)
         self._pair_map: dict[str, str] = {}
         self._old_nodes = set(old_nodes)
         self._new_nodes = set(new_nodes)
         layout = QVBoxLayout(self)
-        hint = QLabel(
+        hint = QLabel(self._tr(
             "Pair only the nodes you want to rename. Leave the rest at "
             "Keep original name. Selected renames must use different NEW nodes. "
             "Pairing applies across the selected baselines; original names remain in the report."
-        )
+        ))
         hint.setObjectName("hintLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.table = QTableWidget(len(old_nodes), 2)
-        self.table.setHorizontalHeaderLabels(["OLD ECU Node", "NEW ECU Node"])
+        self.table.setHorizontalHeaderLabels([self._tr("OLD ECU Node"), self._tr("NEW ECU Node")])
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -370,18 +395,18 @@ class EcuPairingDialog(QDialog):
         for row, old_node in enumerate(old_nodes):
             self.table.setItem(row, 0, QTableWidgetItem(old_node))
             combo = NoWheelComboBox()
-            combo.addItem("— Keep original name —", None)
+            combo.addItem(self._tr("— Keep original name —"), None)
             for new_node in new_nodes:
                 combo.addItem(new_node, new_node)
             if previous and previous.get(old_node) in new_nodes:
                 combo.setCurrentIndex(combo.findData(previous[old_node]))
             self.table.setCellWidget(row, 1, combo)
         layout.addWidget(self.table)
-        counts = QLabel(f"{len(old_nodes)} OLD node(s) · {len(new_nodes)} NEW node(s)")
+        counts = QLabel(self._tr("{old} OLD node(s) · {new} NEW node(s)", old=len(old_nodes), new=len(new_nodes)))
         counts.setObjectName("hintLabel")
         layout.addWidget(counts)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        buttons = dialog_buttons(
+            language, QDialogButtonBox.StandardButton.Save, QDialogButtonBox.StandardButton.Cancel,
         )
         buttons.accepted.connect(self._on_save)
         buttons.rejected.connect(self.reject)
@@ -397,7 +422,7 @@ class EcuPairingDialog(QDialog):
         try:
             validate_ecu_map(pair_map, self._old_nodes, self._new_nodes)
         except ValueError as exc:
-            QMessageBox.warning(self, "Invalid ECU Pairing", str(exc))
+            QMessageBox.warning(self, self._tr("Invalid ECU Pairing"), str(exc))
             return
         self._pair_map = pair_map
         self.accept()
@@ -418,9 +443,12 @@ class ManualPairingDialog(QDialog):
         old_folder: Path,
         new_folder: Path,
         previous: dict[str, str | None] | None = None,
+        *,
+        language: str = "en",
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Manual DBC Pairing")
+        self._tr = partial(translate, language)
+        self.setWindowTitle(self._tr("Manual DBC Pairing"))
         self.resize(780, 520)
         self._pair_map: dict[str, str | None] = {}
 
@@ -428,21 +456,21 @@ class ManualPairingDialog(QDialog):
         new_files = sorted(collect_dbc_files(new_folder))
 
         layout = QVBoxLayout(self)
-        hint = QLabel(
+        hint = QLabel(self._tr(
             "Pick the new-baseline file for each old-baseline file. Old files set to "
             "\"— Removed (no pair) —\" are reported as removed; new files not selected "
             "in any pair are reported as added."
-        )
+        ))
         hint.setObjectName("hintLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        counts = QLabel(f"{len(old_files)} old file(s)  ·  {len(new_files)} new file(s)")
+        counts = QLabel(self._tr("{old} old file(s)  ·  {new} new file(s)", old=len(old_files), new=len(new_files)))
         counts.setObjectName("hintLabel")
         layout.addWidget(counts)
 
         self.table = QTableWidget(len(old_files), 2)
-        self.table.setHorizontalHeaderLabels(["Old Baseline DBC", "New Baseline DBC"])
+        self.table.setHorizontalHeaderLabels([self._tr("Old Baseline DBC"), self._tr("New Baseline DBC")])
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -458,7 +486,7 @@ class ManualPairingDialog(QDialog):
             self.table.setItem(row, 0, old_item)
 
             combo = NoWheelComboBox()
-            combo.addItem("— Removed (no pair) —", None)
+            combo.addItem(self._tr("— Removed (no pair) —"), None)
             for new_rel in new_files:
                 combo.addItem(new_rel, new_rel)
             # Restore the previously saved choice; otherwise default to the
@@ -475,8 +503,8 @@ class ManualPairingDialog(QDialog):
 
         layout.addWidget(self.table)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        buttons = dialog_buttons(
+            language, QDialogButtonBox.StandardButton.Save, QDialogButtonBox.StandardButton.Cancel,
         )
         buttons.accepted.connect(self._on_save)
         buttons.rejected.connect(self.reject)
@@ -492,14 +520,17 @@ class ManualPairingDialog(QDialog):
             pair_map[old_rel] = new_rel
             if new_rel:
                 if new_rel in used_new:
-                    duplicates.append(f"{new_rel} (paired with {used_new[new_rel]} and {old_rel})")
+                    duplicates.append(self._tr(
+                        "{file} (paired with {first} and {second})",
+                        file=new_rel, first=used_new[new_rel], second=old_rel,
+                    ))
                 else:
                     used_new[new_rel] = old_rel
         if duplicates:
             QMessageBox.warning(
                 self,
-                "Duplicate Pairing",
-                "Each new DBC file can only be paired once:\n" + "\n".join(duplicates),
+                self._tr("Duplicate Pairing"),
+                self._tr("Each new DBC file can only be paired once:") + "\n" + "\n".join(duplicates),
             )
             return
         self._pair_map = pair_map
@@ -521,24 +552,33 @@ class MainWindow(QMainWindow):
         self._pending_output_path: Path | None = None
         self.last_report: Path | None = None
         self._settings = QSettings("DbcCompareTool", "DBCCompareTool")
+        self._gui_language = self._language_preference("gui_language", LANGUAGES, "en")
+        self._report_language = self._language_preference("report_language", ("gui", *LANGUAGES), "gui")
+        self._pending_report_language = "en"
+        self._text_bindings = []
+        self._status = ("Ready to compare", {})
 
         self.old_input = DropLineEdit()
         self.new_input = DropLineEdit()
         self.input_mode = NoWheelComboBox()
         self.input_mode.addItem("Folders", "folders")
         self.input_mode.addItem("Files", "files")
-        self.input_mode.setAccessibleName("Input Type")
+        self._bind_text(self.input_mode.setAccessibleName, "Input Type")
         self.output_input = QLineEdit()
-        self.output_input.setPlaceholderText(
-            "Automatic: beside New folder as compared_<folder>.xlsx"
-        )
-        self.run_button = QPushButton("Run Compare")
-        self.manual_pair_button = QPushButton("Manual Pairing…")
-        self.ecu_pair_button = QPushButton("ECU Pairing…")
-        self.open_button = QPushButton("Open Report")
+        self.run_button = self._text_widget(QPushButton, "Run Compare")
+        self.manual_pair_button = self._text_widget(QPushButton, "Manual Pairing…")
+        self.ecu_pair_button = self._text_widget(QPushButton, "ECU Pairing…")
+        self.open_button = self._text_widget(QPushButton, "Open Report")
+        self.focus_checkbox = self._text_widget(QCheckBox, "ECU Focus")
+        self.focus_button = self._text_widget(QPushButton, "Select ECUs…")
+        self.focus_hint = QLabel()
+        self.focus_hint.setWordWrap(True)
+        self.focus_hint.setObjectName("hintLabel")
+        self._focus_nodes: set[str] = set()
+        self._ecu_load_focus = False
         self.progress = QProgressBar()
         self.log_view = QTextEdit()
-        self.run_status = QLabel("Ready to compare")
+        self.run_status = QLabel()
         self.run_status.setObjectName("runStatus")
         self.run_status.setWordWrap(True)
 
@@ -550,38 +590,140 @@ class MainWindow(QMainWindow):
         self._saved_ecu_inputs: tuple[str, str, str] | None = None
         self._ecu_load_inputs: tuple[str, str, str] | None = None
 
-        # Filter checkboxes
-        self.chk_added = QCheckBox("Added")
-        self.chk_removed = QCheckBox("Removed")
-        self.chk_modified = QCheckBox("Modified")
-        self.chk_renamed = QCheckBox("Renamed")
-        for chk in (self.chk_added, self.chk_removed, self.chk_modified, self.chk_renamed):
-            chk.setChecked(True)
-        self.chk_include_unchanged = QCheckBox("Include Unchanged")
-        self.chk_include_unchanged.setToolTip(
-            "Export every message and signal, including unchanged entries. "
-            "Change-type filters are ignored in this mode."
+        self.chk_include_unchanged = self._text_widget(QCheckBox, "Include Unchanged")
+        self._bind_text(
+            self.chk_include_unchanged.setToolTip,
+            "Include unchanged messages and signals within the current ECU scope."
         )
 
         self._build_menu()
         self._build_layout()
         self._wire_events()
         self._restore_paths()
+        self._update_language()
+
+    def _language_preference(self, key: str, choices: tuple[str, ...], default: str) -> str:
+        value = self._settings.value(key, default, type=str)
+        return value if value in choices else default
+
+    def _tr(self, key: str, **parameters: object) -> str:
+        return translate(self._gui_language, key, **parameters)
+
+    def _bind_text(self, setter, key: str) -> None:
+        self._text_bindings.append((setter, key))
+        setter(self._tr(key))
+
+    def _text_widget(self, widget_type, key: str):
+        widget = widget_type()
+        self._bind_text(widget.setText, key)
+        return widget
+
+    def _update_language(self) -> None:
+        for setter, key in self._text_bindings:
+            setter(self._tr(key))
+        self.input_mode.setItemText(self.input_mode.findData("folders"), self._tr("Folders"))
+        self.input_mode.setItemText(self.input_mode.findData("files"), self._tr("Files"))
+        self._update_input_labels()
+        self._update_focus_controls()
+        status, parameters = self._status
+        self._set_status(status, **parameters)
+
+    def _set_languages(self, gui_language: str, report_language: str) -> None:
+        self._gui_language = gui_language
+        self._report_language = report_language
+        self._settings.setValue("gui_language", gui_language)
+        self._settings.setValue("report_language", report_language)
+        self._update_language()
+
+    def _show_language_settings(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self._tr("Language"))
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(14)
+        form = QFormLayout()
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(10)
+        combos = []
+        for key, current, follow_gui in (
+            ("GUI Language", self._gui_language, False),
+            ("Report Language", self._report_language, True),
+        ):
+            combo = NoWheelComboBox(dialog)
+            if follow_gui:
+                combo.addItem(self._tr("Follow GUI"), "gui")
+            combo.addItem("English", "en")
+            combo.addItem("Tiếng Việt", "vi")
+            combo.setCurrentIndex(combo.findData(current))
+            label = QLabel(self._tr(key))
+            label.setBuddy(combo)
+            combo.setAccessibleName(label.text())
+            form.addRow(label, combo)
+            combos.append(combo)
+        layout.addLayout(form)
+
+        buttons = dialog_buttons(
+            self._gui_language, QDialogButtonBox.StandardButton.Save, QDialogButtonBox.StandardButton.Cancel,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        try:
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self._set_languages(combos[0].currentData(), combos[1].currentData())
+        finally:
+            dialog.deleteLater()
+
+    def _set_status(self, key: str, **parameters: object) -> None:
+        self._status = (key, parameters)
+        if "status" in parameters:
+            parameters = {**parameters, "status": self._tr(parameters["status"])}
+        self.run_status.setText(self._tr(key, **parameters))
 
     def _build_menu(self) -> None:
+        self.settings_menu = self.menuBar().addMenu("")
+        self._bind_text(self.settings_menu.setTitle, "Settings")
+        self.language_action = self.settings_menu.addAction("")
+        self._bind_text(self.language_action.setText, "Language…")
+        self.language_action.triggered.connect(self._show_language_settings)
+
         help_menu = self.menuBar().addMenu("Help")
         user_guide_action = help_menu.addAction("User Guide")
-        changelog_action = help_menu.addAction("Changelog")
+        release_note_action = help_menu.addAction("Release note")
         about_action = help_menu.addAction("About")
+        self._bind_text(help_menu.setTitle, "Help")
+        for action, key in ((user_guide_action, "User Guide"), (release_note_action, "Release note"), (about_action, "About")):
+            self._bind_text(action.setText, key)
         user_guide_action.triggered.connect(
-            lambda: self._show_help_document("User Guide", "help/user_guide.md")
+            lambda: self._show_help_document(
+                "User Guide", "help/user_guide_vi.md" if self._gui_language == "vi" else "help/user_guide.md",
+            )
         )
-        changelog_action.triggered.connect(self._show_changelog)
-        about_action.triggered.connect(lambda: self._show_help_document("About", "help/about.md"))
+        release_note_action.triggered.connect(self._show_release_note)
+        about_action.triggered.connect(lambda: self._show_help_document(
+            "About", "help/about_vi.md" if self._gui_language == "vi" else "help/about.md",
+        ))
+
+    def _section(self, key: str) -> tuple[QGroupBox, QGridLayout]:
+        card = QGroupBox()
+        card.setObjectName("sectionCard")
+        self._bind_text(card.setAccessibleName, key)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.setSpacing(12)
+        title = self._text_widget(QLabel, key)
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        form = QGridLayout()
+        form.setHorizontalSpacing(8)
+        form.setVerticalSpacing(8)
+        form.setColumnStretch(1, 1)
+        layout.addLayout(form)
+        return card, form
 
     def _build_layout(self) -> None:
         # Header
-        title = QLabel("DBC Compare Tool")
+        title = self._text_widget(QLabel, "DBC Compare Tool")
         title.setObjectName("appTitle")
 
         version_label = QLabel(f"v{__version__}")
@@ -593,101 +735,85 @@ class MainWindow(QMainWindow):
         title_row.addWidget(version_label, alignment=Qt.AlignmentFlag.AlignVCenter)
         title_row.addStretch()
 
-        subtitle = QLabel("Compare DBC baselines. Review message and signal changes in Excel.")
+        subtitle = self._text_widget(QLabel, "Compare DBC baselines. Review message and signal changes in Excel.")
         subtitle.setObjectName("appSubtitle")
+        subtitle.setWordWrap(True)
 
         header = QVBoxLayout()
         header.setSpacing(2)
         header.addLayout(title_row)
         header.addWidget(subtitle)
-
         # Baselines and report settings follow the comparison workflow.
-        input_group = QGroupBox("Baselines")
-        form = QGridLayout(input_group)
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(8)
+        input_group, form = self._section("Baselines")
 
-        mode_label = QLabel("Input Type")
+        mode_label = self._text_widget(QLabel, "Input Type")
         mode_label.setBuddy(self.input_mode)
         form.addWidget(mode_label, 0, 0)
-        form.addWidget(self.input_mode, 0, 1)
+        self.input_mode.setMinimumWidth(140)
+        form.addWidget(self.input_mode, 0, 1, alignment=Qt.AlignmentFlag.AlignLeft)
 
-        old_label = self.old_label = QLabel("Old Baseline Folder")
+        old_label = self.old_label = QLabel()
         old_label.setBuddy(self.old_input)
-        self.old_input.setAccessibleName("Old Baseline Folder")
         form.addWidget(old_label, 1, 0)
         form.addWidget(self.old_input, 1, 1)
-        old_button = QPushButton("Browse")
-        old_button.setAccessibleName("Browse old baseline folder")
+        old_button = self._text_widget(QPushButton, "Browse")
         old_button.clicked.connect(lambda: self._choose_baseline(self.old_input))
         form.addWidget(old_button, 1, 2)
 
-        new_label = self.new_label = QLabel("New Baseline Folder")
+        new_label = self.new_label = QLabel()
         new_label.setBuddy(self.new_input)
-        self.new_input.setAccessibleName("New Baseline Folder")
         form.addWidget(new_label, 2, 0)
         form.addWidget(self.new_input, 2, 1)
-        new_button = QPushButton("Browse")
-        new_button.setAccessibleName("Browse new baseline folder")
+        new_button = self._text_widget(QPushButton, "Browse")
         new_button.clicked.connect(lambda: self._choose_baseline(self.new_input))
         form.addWidget(new_button, 2, 2)
 
         pairing_row = QHBoxLayout()
-        pairing_hint = self.pairing_hint = QLabel("Automatic DBC pairing by default.")
+        pairing_row.setSpacing(8)
+        pairing_hint = self.pairing_hint = QLabel()
         pairing_hint.setObjectName("hintLabel")
         pairing_hint.setWordWrap(True)
         pairing_row.addWidget(pairing_hint, 1)
         pairing_row.addWidget(self.manual_pair_button)
         pairing_row.addWidget(self.ecu_pair_button)
         form.addLayout(pairing_row, 3, 0, 1, 3)
-        form.setColumnStretch(1, 1)
 
-        report_group = QGroupBox("Report")
-        report_form = QGridLayout(report_group)
-        report_form.setHorizontalSpacing(10)
-        report_form.setVerticalSpacing(10)
-        output_label = QLabel("Report Path (optional)")
+        report_group, report_form = self._section("Report")
+        output_label = self._text_widget(QLabel, "Report Path (optional)")
         output_label.setBuddy(self.output_input)
-        self.output_input.setAccessibleName("Report Path (optional)")
+        self._bind_text(self.output_input.setAccessibleName, "Report Path (optional)")
         report_form.addWidget(output_label, 0, 0)
-        label_width = max(label.sizeHint().width() for label in (old_label, new_label, output_label))
-        for label in (old_label, new_label, output_label):
-            label.setFixedWidth(label_width)
+        self._path_labels = (old_label, new_label, output_label)
         report_form.addWidget(self.output_input, 0, 1)
-        output_button = QPushButton("Browse")
-        output_button.setAccessibleName("Browse report output path")
+        output_button = self._text_widget(QPushButton, "Browse")
+        self._bind_text(output_button.setAccessibleName, "Browse report output path")
         output_button.clicked.connect(self._choose_report)
         report_form.addWidget(output_button, 0, 2)
-        report_form.setColumnStretch(1, 1)
         report_form.addWidget(self.chk_include_unchanged, 1, 0, 1, 3)
         self._browse_buttons = (old_button, new_button, output_button)
 
-        filter_layout = QHBoxLayout()
-        filter_layout.setSpacing(16)
-        filter_label = QLabel("Change types")
-        filter_label.setObjectName("hintLabel")
-        filter_layout.addWidget(filter_label)
-        for chk in (self.chk_added, self.chk_removed, self.chk_modified, self.chk_renamed):
-            filter_layout.addWidget(chk)
-        filter_layout.addStretch()
-        report_form.addLayout(filter_layout, 2, 0, 1, 3)
-        self.report_hint = QLabel("Change-type filters are ignored.")
-        self.report_hint.setObjectName("hintLabel")
-        self.report_hint.setWordWrap(True)
-        self.report_hint.setVisible(False)
-        report_form.addWidget(self.report_hint, 3, 0, 1, 3)
+        focus_row = QHBoxLayout()
+        focus_row.setSpacing(12)
+        focus_row.addWidget(self.focus_checkbox)
+        focus_row.addWidget(self.focus_button)
+        focus_row.addStretch()
+        report_form.addLayout(focus_row, 2, 0, 1, 3)
+        report_form.addWidget(self.focus_hint, 3, 0, 1, 3)
 
         # Action buttons
         self.run_button.setObjectName("primaryButton")
-        self.run_button.setToolTip(
+        self._bind_text(
+            self.run_button.setToolTip,
             "Compare two DBC files directly in Files mode. In Folders mode, use saved manual "
             "mapping, including Removed rows; otherwise use automatic matching. "
             "Saved ECU pairing applies in either mode."
         )
-        self.manual_pair_button.setToolTip(
+        self._bind_text(
+            self.manual_pair_button.setToolTip,
             "Choose which new-baseline file each old-baseline file is compared against."
         )
-        self.ecu_pair_button.setToolTip(
+        self._bind_text(
+            self.ecu_pair_button.setToolTip,
             "Pair renamed ECU nodes to avoid routing changes caused only by node renaming."
         )
         buttons = QHBoxLayout()
@@ -703,10 +829,13 @@ class MainWindow(QMainWindow):
         self.open_button.setEnabled(False)
         self.log_view.setObjectName("logView")
         self.log_view.setReadOnly(True)
-        self.log_view.setPlaceholderText("Comparison progress and results will appear here.")
-        self.log_view.setMinimumHeight(140)
+        self._bind_text(self.log_view.setPlaceholderText, "Comparison progress and results will appear here.")
+        self.log_view.setMinimumHeight(120)
+        # Let the log fill the remaining space without forcing its size hint
+        # onto the height-for-width layout of the scroll area.
+        self.log_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
 
-        log_label = QLabel("Execution Log")
+        log_label = self._text_widget(QLabel, "Execution Log")
         log_label.setObjectName("hintLabel")
 
         # Keep actions outside the scroll area, including at the minimum size.
@@ -717,7 +846,7 @@ class MainWindow(QMainWindow):
         baseline_layout.addWidget(input_group)
         baseline_layout.addWidget(report_group)
         baseline_layout.addWidget(log_label)
-        baseline_layout.addWidget(self.log_view)
+        baseline_layout.addWidget(self.log_view, 1)
         baseline_tab = _scrollable(baseline_content)
 
         central = QWidget()
@@ -731,16 +860,16 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         focus_order = (
-            self.input_mode, self.old_input, old_button, self.new_input, new_button,
+            self.input_mode,
+            self.old_input, old_button, self.new_input, new_button,
             self.manual_pair_button, self.ecu_pair_button, self.output_input, output_button,
-            self.chk_include_unchanged, self.chk_added, self.chk_removed,
-            self.chk_modified, self.chk_renamed, self.run_button, self.open_button,
+            self.chk_include_unchanged, self.focus_checkbox, self.focus_button,
+            self.run_button, self.open_button,
         )
         for first, second in zip(focus_order, focus_order[1:]):
             QWidget.setTabOrder(first, second)
 
     def _wire_events(self) -> None:
-        self.chk_include_unchanged.toggled.connect(self._update_change_filters)
         self.run_button.clicked.connect(self._run_compare)
         self.manual_pair_button.clicked.connect(self._open_manual_pairing)
         self.ecu_pair_button.clicked.connect(self._open_ecu_pairing)
@@ -748,7 +877,11 @@ class MainWindow(QMainWindow):
         self.open_button.clicked.connect(self._open_report)
         self.old_input.textChanged.connect(self._invalidate_saved_pairing)
         self.new_input.textChanged.connect(self._invalidate_saved_pairing)
-        self.new_input.textChanged.connect(self._update_output_hint)
+        for field in (self.old_input, self.new_input):
+            field.textChanged.connect(self._update_output_hint)
+            field.textChanged.connect(self._clear_focus)
+        self.focus_checkbox.toggled.connect(self._toggle_focus)
+        self.focus_button.clicked.connect(self._open_ecu_focus)
 
     def _current_folder_inputs(self) -> tuple[str, str]:
         return (self.old_input.text().strip(), self.new_input.text().strip())
@@ -761,21 +894,45 @@ class MainWindow(QMainWindow):
 
     def _on_input_mode_changed(self) -> None:
         self._clear_saved_pairing()
-        kind = "DBC" if self._files_mode() else "Folder"
-        self.old_label.setText(f"Old Baseline {kind}")
-        self.new_label.setText(f"New Baseline {kind}")
+        self._clear_focus()
+        self._update_input_labels()
+
+    def _update_input_labels(self) -> None:
+        files = self._files_mode()
+        self.old_label.setText(self._tr("Old Baseline DBC" if files else "Old Baseline Folder"))
+        self.new_label.setText(self._tr("New Baseline DBC" if files else "New Baseline Folder"))
         self.old_input.setAccessibleName(self.old_label.text())
         self.new_input.setAccessibleName(self.new_label.text())
         for field in (self.old_input, self.new_input):
-            field.set_files_mode(self._files_mode())
+            field.set_files_mode(files, self._gui_language)
         for side, button in zip(("old", "new"), self._browse_buttons[:2]):
-            button.setAccessibleName(f"Browse {side} baseline {kind.lower()}")
-        self.manual_pair_button.setEnabled(self.run_button.isEnabled() and not self._files_mode())
-        self.pairing_hint.setText(
+            button.setAccessibleName(self._tr(f"Browse {side} baseline {'dbc' if files else 'folder'}"))
+        label_width = max(label.sizeHint().width() for label in self._path_labels)
+        for label in self._path_labels:
+            label.setFixedWidth(label_width)
+        self.manual_pair_button.setEnabled(self.run_button.isEnabled() and not files)
+        self.pairing_hint.setText(self._tr(
             "The selected DBC files are compared directly."
-            if self._files_mode() else "Automatic DBC pairing by default."
-        )
+            if files else "Automatic DBC pairing by default."
+        ))
         self._update_output_hint()
+
+    def _clear_focus(self) -> None:
+        self._focus_nodes.clear()
+        self._update_focus_controls()
+
+    def _toggle_focus(self, enabled: bool) -> None:
+        self._update_focus_controls()
+        if enabled:
+            self._open_ecu_focus()
+
+    def _update_focus_controls(self) -> None:
+        enabled = self.focus_checkbox.isChecked()
+        self.focus_button.setEnabled(enabled and self.run_button.isEnabled())
+        self.focus_hint.setVisible(enabled)
+        names = ", ".join(sorted(self._focus_nodes))
+        self.focus_hint.setText(names or self._tr("Select at least one ECU node for focus"))
+        self.focus_hint.setToolTip(names)
 
     def _clear_saved_pairing(self) -> None:
         had_pairing = self._saved_pair_map is not None or bool(self._saved_ecu_map)
@@ -801,20 +958,22 @@ class MainWindow(QMainWindow):
         old_text, new_text = self._current_folder_inputs()
         # Guard empty text explicitly: Path("") is ".", which is_dir() accepts.
         if not old_text or not new_text or not Path(old_text).is_dir() or not Path(new_text).is_dir():
-            QMessageBox.warning(self, "Invalid Input", "Select valid old and new baseline folders first.")
+            QMessageBox.warning(self, self._tr("Invalid Input"), self._tr("Select valid old and new baseline folders first."))
             return False
         old_folder = Path(old_text)
         new_folder = Path(new_text)
 
         previous = self._saved_pair_map if self._saved_pair_folders == self._current_folder_inputs() else None
         try:
-            dialog = ManualPairingDialog(self, old_folder, new_folder, previous=previous)
+            dialog = ManualPairingDialog(
+                self, old_folder, new_folder, previous=previous, language=self._gui_language,
+            )
         except OSError as exc:
-            QMessageBox.critical(self, "Load Failed", f"Unable to scan folders: {exc}")
+            QMessageBox.critical(self, self._tr("Load Failed"), self._tr("Unable to scan folders: {error}", error=exc))
             return False
 
         previous_status = self.run_status.text()
-        self.run_status.setText("Editing DBC pairing…")
+        self.run_status.setText(self._tr("Editing DBC pairing…"))
         try:
             accepted = dialog.exec() == QDialog.DialogCode.Accepted
         finally:
@@ -841,26 +1000,33 @@ class MainWindow(QMainWindow):
         paths = (Path(old_text), Path(new_text))
         if self._files_mode():
             valid = all(path.is_file() and path.suffix.lower() == ".dbc" for path in paths)
-            expected = "DBC files"
+            message = "Select valid old and new DBC files."
         else:
             valid = all(path.is_dir() for path in paths)
-            expected = "baseline folders"
+            message = "Select valid old and new baseline folders."
         # Empty text must not be accepted as Path(""), which points to cwd.
         if not old_text or not new_text or not valid:
-            QMessageBox.warning(self, "Invalid Input", f"Select valid old and new {expected}.")
+            QMessageBox.warning(self, self._tr("Invalid Input"), self._tr(message))
             return None
         return paths
 
     def _open_ecu_pairing(self) -> None:
+        self._scan_ecu_nodes(focus=False)
+
+    def _open_ecu_focus(self) -> None:
+        self._scan_ecu_nodes(focus=True)
+
+    def _scan_ecu_nodes(self, *, focus: bool) -> None:
         paths = self._validated_baselines()
         if paths is None:
             return
         self._ecu_load_inputs = self._current_inputs()
+        self._ecu_load_focus = focus
         self._set_actions_enabled(False)
         self.open_button.setEnabled(False)
         self.progress.setRange(0, 0)
         self.progress.show()
-        self.run_status.setText("Loading ECU nodes…")
+        self._set_status("Loading ECU nodes…")
         self.ecu_worker = EcuDiscoveryWorker(*paths)
         self.ecu_worker.loaded.connect(self._on_ecu_nodes_loaded)
         self.ecu_worker.failed.connect(self._ecu_load_failed)
@@ -872,40 +1038,59 @@ class MainWindow(QMainWindow):
         self.progress.hide()
         self._set_actions_enabled(True)
         self.open_button.setEnabled(self.last_report is not None)
-        self.run_status.setText("Ready to compare")
+        self._set_status("Ready to compare")
 
     def _on_ecu_nodes_loaded(self, old_nodes: list[str], new_nodes: list[str]) -> None:
         if self._ecu_load_inputs != self._current_inputs():
             self._finish_ecu_loading()
             return
         previous = (
-            self._saved_ecu_map if self._saved_ecu_inputs == self._current_inputs() else None
+            self._saved_ecu_map if self._saved_ecu_inputs == self._current_inputs() else {}
         )
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.progress.hide()
-        self.run_status.setText("Editing ECU pairing…")
+        self._set_status("Selecting focus ECUs…" if self._ecu_load_focus else "Editing ECU pairing…")
         try:
-            dialog = EcuPairingDialog(self, old_nodes, new_nodes, previous=previous)
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                self._saved_ecu_map = dialog.pair_map()
-                self._saved_ecu_inputs = self._current_inputs()
-                self._log(f"ECU pairing saved: {len(self._saved_ecu_map)} renamed node pair(s).")
+            diagnostics = self.ecu_worker.diagnostics if self.ecu_worker else []
+            if diagnostics:
+                for entry in diagnostics:
+                    self._log(f"Parse error: {entry.side} {entry.path}: {entry.reason}")
+                QMessageBox.warning(self, self._tr("Some DBC files could not be read"), self._tr(
+                    "{count} DBC file(s) were skipped. Only nodes from readable files are listed. See log for details.",
+                    count=len(diagnostics),
+                ))
+            if self._ecu_load_focus:
+                # A previous node can disappear when the files change on disk.
+                self._focus_nodes.intersection_update(set(old_nodes) | set(new_nodes))
+                dialog = EcuFocusDialog(
+                    self, old_nodes, new_nodes, previous, self._focus_nodes, language=self._gui_language,
+                )
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    self._focus_nodes = dialog.selected_nodes()
+            else:
+                dialog = EcuPairingDialog(self, old_nodes, new_nodes, previous=previous, language=self._gui_language)
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    self._saved_ecu_map = dialog.pair_map()
+                    self._saved_ecu_inputs = self._current_inputs()
+                    if previous != self._saved_ecu_map:
+                        self._clear_focus()
+                    self._log(f"ECU pairing saved: {len(self._saved_ecu_map)} renamed node pair(s).")
         finally:
             self._finish_ecu_loading()
 
     def _ecu_load_failed(self, message: str) -> None:
         self._finish_ecu_loading()
         self._log(f"Unable to load ECU nodes: {message}")
-        QMessageBox.critical(self, "ECU Load Failed", message)
+        QMessageBox.critical(self, self._tr("ECU Load Failed"), message)
 
     def _choose_baseline(self, target: QLineEdit) -> None:
         if self._files_mode():
             path, _ = QFileDialog.getOpenFileName(
-                self, "Select Baseline DBC", target.text().strip(), "DBC files (*.dbc)"
+                self, self._tr("Select Baseline DBC"), target.text().strip(), self._tr("DBC files (*.dbc)")
             )
         else:
-            path = QFileDialog.getExistingDirectory(self, "Select Baseline Folder")
+            path = QFileDialog.getExistingDirectory(self, self._tr("Select Baseline Folder"))
         if path:
             # Qt hands back forward slashes; normalize to the native separator so
             # every path field reads the same way.
@@ -914,39 +1099,29 @@ class MainWindow(QMainWindow):
     def _choose_report(self) -> None:
         suggested_path = self.output_input.text().strip()
         if not suggested_path:
-            new_text = self.new_input.text().strip()
-            if new_text:
-                suggested_path = str(default_report_path(Path(new_text)))
+            suggested_path = str(self._automatic_report_path() or "")
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Excel Report", suggested_path, "Excel (*.xlsx)"
+            self, self._tr("Save Excel Report"), suggested_path, self._tr("Excel (*.xlsx)")
         )
         if path:
             if not path.lower().endswith(".xlsx"):
                 path += ".xlsx"
             self.output_input.setText(str(Path(path)))
 
-    def _update_output_hint(self) -> None:
-        new_text = self.new_input.text().strip()
-        if new_text:
-            automatic = default_report_path(Path(new_text))
-            self.output_input.setPlaceholderText(f"Automatic: {automatic}")
-        else:
-            self.output_input.setPlaceholderText(
-                "Automatic: beside New DBC as compared_<file>.xlsx"
-                if self._files_mode() else "Automatic: beside New folder as compared_<folder>.xlsx"
-            )
+    def _automatic_report_path(self) -> Path | None:
+        old, new = self._current_folder_inputs()
+        if old and new:
+            return default_report_path(Path(old), Path(new))
+        return None
 
-    def _selected_change_types(self) -> set[str]:
-        types: set[str] = set()
-        if self.chk_added.isChecked():
-            types.add("Added")
-        if self.chk_removed.isChecked():
-            types.add("Removed")
-        if self.chk_modified.isChecked():
-            types.add("Modified")
-        if self.chk_renamed.isChecked():
-            types.add("Renamed")
-        return types
+    def _update_output_hint(self) -> None:
+        automatic = self._automatic_report_path()
+        if automatic is not None:
+            hint = self._tr("Automatic: {path}", path=automatic)
+        else:
+            hint = self._tr("Automatic: beside NEW as compared_<old>_vs_<new>.xlsx")
+        self.output_input.setPlaceholderText(hint)
+        self.output_input.setToolTip(hint)
 
     def _complete_manual_pairing(self) -> dict[str, str | None] | None:
         """Honor saved mappings for these inputs, including explicit Removed rows."""
@@ -972,17 +1147,20 @@ class MainWindow(QMainWindow):
         if self._files_mode():
             pair_map = None
         output_text = self.output_input.text().strip()
-        output_path = Path(output_text) if output_text else default_report_path(new_folder)
+        output_path = Path(output_text) if output_text else default_report_path(old_folder, new_folder)
         if output_path.suffix.lower() != ".xlsx":
-            QMessageBox.warning(self, "Invalid Output", "Report path must end with .xlsx.")
+            QMessageBox.warning(self, self._tr("Invalid Output"), self._tr("Report path must end with .xlsx."))
             return
 
-        selected = self._selected_change_types()
-        if not selected and not self.chk_include_unchanged.isChecked():
-            QMessageBox.warning(self, "No Filter Selected", "Select at least one change type to include.")
+        focus_nodes = self._focus_nodes if self.focus_checkbox.isChecked() else set()
+        if self.focus_checkbox.isChecked() and not focus_nodes:
+            QMessageBox.warning(self, self._tr("ECU Focus"), self._tr("Select at least one ECU node for focus"))
             return
 
         self._pending_output_path = output_path
+        self._pending_report_language = (
+            self._gui_language if self._report_language == "gui" else self._report_language
+        )
         self.log_view.clear()
         pairing = (
             "direct file comparison" if self._files_mode()
@@ -995,13 +1173,14 @@ class MainWindow(QMainWindow):
             self._log(f"Using {len(ecu_map)} ECU node pair(s).")
         self.progress.setRange(0, 0)
         self.progress.show()
-        self.run_status.setText("Comparing baselines…")
+        self._set_status("Comparing baselines…")
         self._set_actions_enabled(False)
         self.open_button.setEnabled(False)
         self.worker = CompareWorker(
             old_folder, new_folder, pair_map,
             include_unchanged=self.chk_include_unchanged.isChecked(),
             ecu_map=ecu_map,
+            focus_nodes=focus_nodes,
         )
         self.worker.log.connect(self._log)
         self.worker.compared.connect(self._on_compared)
@@ -1013,21 +1192,19 @@ class MainWindow(QMainWindow):
         self.manual_pair_button.setEnabled(enabled and not self._files_mode())
         self.ecu_pair_button.setEnabled(enabled)
         self.input_mode.setEnabled(enabled)
+        self.settings_menu.setEnabled(enabled)
+        self.language_action.setEnabled(enabled)
+        self.focus_checkbox.setEnabled(enabled)
+        self._update_focus_controls()
         self.chk_include_unchanged.setEnabled(enabled)
         for control in (self.old_input, self.new_input, self.output_input, *self._browse_buttons):
             control.setEnabled(enabled)
-        self._update_change_filters()
-
-    def _update_change_filters(self) -> None:
-        enabled = self.run_button.isEnabled() and not self.chk_include_unchanged.isChecked()
-        for chk in (self.chk_added, self.chk_removed, self.chk_modified, self.chk_renamed):
-            chk.setEnabled(enabled)
-        self.report_hint.setVisible(self.chk_include_unchanged.isChecked())
 
     def _on_compared(self, result: ComparisonResult) -> None:
-        result = filter_result(result, self._selected_change_types())
-        self.run_status.setText("Writing Excel report…")
-        self.export_worker = ExportWorker(result, self._pending_output_path)
+        self._set_status("Writing Excel report…")
+        self.export_worker = ExportWorker(
+            result, self._pending_output_path, language=self._pending_report_language,
+        )
         self.export_worker.log.connect(self._log)
         self.export_worker.completed.connect(self._completed)
         self.export_worker.failed.connect(self._failed)
@@ -1065,8 +1242,10 @@ class MainWindow(QMainWindow):
         self.open_button.setEnabled(True)
         self.last_report = report_path
         status = "Report incomplete" if summary.get("completeness") == "Incomplete" else "Report ready"
-        self.run_status.setText(f"{status} · {summary['Total Changes']} changes · "
-                               f"{summary.get('parse_error_count', 0)} file errors")
+        self._set_status(
+            "{status} · {changes} changes · {errors} file errors",
+            status=status, changes=summary["Total Changes"], errors=summary.get("parse_error_count", 0),
+        )
         self._log(f"Report generated: {report_path}")
         self._log(f"Total changes: {summary['Total Changes']}")
         self._save_paths()
@@ -1076,16 +1255,16 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.progress.hide()
         self._set_actions_enabled(True)
-        self.run_status.setText("Comparison failed — see log")
+        self._set_status("Comparison failed — see log")
         self._log(f"Failed: {message}")
-        QMessageBox.critical(self, "Comparison Failed", message)
+        QMessageBox.critical(self, self._tr("Comparison Failed"), message)
 
     def _open_report(self) -> None:
         if self.last_report and self.last_report.exists():
             os.startfile(self.last_report)
         else:
             QMessageBox.information(
-                self, "Report Not Found", "The report file no longer exists. Run the comparison again."
+                self, self._tr("Report Not Found"), self._tr("The report file no longer exists. Run the comparison again.")
             )
 
     def closeEvent(self, event) -> None:
@@ -1095,8 +1274,8 @@ class MainWindow(QMainWindow):
         if running:
             reply = QMessageBox.question(
                 self,
-                "Comparison Running",
-                "A comparison is still running. Quit anyway?",
+                self._tr("Comparison Running"),
+                self._tr("A comparison is still running. Quit anyway?"),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -1112,20 +1291,22 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def _show_help_document(self, title: str, filename: str) -> None:
+        title = self._tr(title)
         try:
             content = _read_resource_text(filename)
         except OSError as exc:
-            QMessageBox.critical(self, title, f"Unable to open help file: {exc}")
+            QMessageBox.critical(self, title, self._tr("Unable to open help file: {error}", error=exc))
             return
         self._show_markdown(title, content)
 
-    def _show_changelog(self) -> None:
+    def _show_release_note(self) -> None:
+        title = self._tr("Release note")
         try:
-            content = _changelog_path().read_text(encoding="utf-8")
-        except OSError as exc:
-            QMessageBox.critical(self, "Changelog", f"Unable to open the changelog: {exc}")
+            content = published_release_notes(_changelog_path().read_text(encoding="utf-8"))
+        except (OSError, UnicodeError) as exc:
+            QMessageBox.critical(self, title, self._tr("Unable to open the release notes: {error}", error=exc))
             return
-        self._show_markdown("Changelog", content)
+        self._show_markdown(title, content or self._tr("No release notes available."))
 
     def _show_markdown(self, title: str, content: str) -> None:
         content = content.replace("{version}", __version__)
@@ -1137,7 +1318,7 @@ class MainWindow(QMainWindow):
         viewer = QTextBrowser()
         viewer.setOpenExternalLinks(True)
         viewer.setMarkdown(content)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons = dialog_buttons(self._gui_language, QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(viewer)
         layout.addWidget(buttons)
@@ -1147,12 +1328,81 @@ class MainWindow(QMainWindow):
         self.log_view.append(message)
 
 
+def _configure_appearance(app: QApplication) -> None:
+    """Keep styled widgets and their native subcontrols on the same palette."""
+    app.setStyle("Fusion")
+    palette = app.style().standardPalette()
+    for role, color in (
+        (QPalette.ColorRole.Window, "#f4f6fb"),
+        (QPalette.ColorRole.Base, "#ffffff"),
+        (QPalette.ColorRole.AlternateBase, "#f4f6fb"),
+        (QPalette.ColorRole.Button, "#ffffff"),
+        (QPalette.ColorRole.WindowText, "#1f2430"),
+        (QPalette.ColorRole.Text, "#1f2430"),
+        (QPalette.ColorRole.ButtonText, "#1f2430"),
+        (QPalette.ColorRole.PlaceholderText, "#64748b"),
+        (QPalette.ColorRole.Highlight, "#2563eb"),
+        (QPalette.ColorRole.HighlightedText, "#ffffff"),
+        (QPalette.ColorRole.ToolTipBase, "#ffffff"),
+        (QPalette.ColorRole.ToolTipText, "#1f2430"),
+    ):
+        palette.setColor(role, QColor(color))
+    for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
+        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor("#64748b"))
+    app.setPalette(palette)
+    arrow = _resource_path("chevron-down.svg")
+    stylesheet = _STYLESHEET
+    if arrow.is_file() and not QPixmap(str(arrow)).isNull():
+        stylesheet += """
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 25px;
+    border: none;
+}
+QComboBox::down-arrow {
+    image: url("ARROW_PATH");
+    width: 10px;
+    height: 6px;
+}
+""".replace("ARROW_PATH", arrow.as_posix())
+    check = _resource_path("checkbox-check.svg")
+    if check.is_file() and not QPixmap(str(check)).isNull():
+        stylesheet += """
+QCheckBox::indicator, QListWidget::indicator {
+    width: 15px;
+    height: 15px;
+    border: 1px solid #64748b;
+    border-radius: 3px;
+    background-color: #ffffff;
+}
+QCheckBox::indicator:unchecked:hover, QListWidget::indicator:unchecked:hover {
+    border-color: #2563eb;
+    background-color: #eff6ff;
+}
+QCheckBox::indicator:checked, QListWidget::indicator:checked {
+    border-color: #1d4ed8;
+    background-color: #1d4ed8;
+    image: url("CHECK_PATH");
+}
+QCheckBox::indicator:disabled, QListWidget::indicator:disabled {
+    border-color: #94a3b8;
+    background-color: #f1f5f9;
+}
+QCheckBox::indicator:checked:disabled, QListWidget::indicator:checked:disabled {
+    border-color: #64748b;
+    background-color: #64748b;
+}
+""".replace("CHECK_PATH", check.as_posix())
+    app.setStyleSheet(stylesheet)
+
+
 def main() -> int:
     app = QApplication(sys.argv)
     icon_path = _resource_path("app.ico")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
-    app.setStyleSheet(_STYLESHEET)
+    _configure_appearance(app)
     window = MainWindow()
     window.show()
     return app.exec()
