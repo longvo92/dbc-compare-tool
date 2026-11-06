@@ -2,7 +2,7 @@
 
 **Phiên bản {version}** · Phát triển bởi **Long Vo Thien** · Giấy phép MIT
 
-[Repo gốc: longvo92/dbc-compare-tool](https://github.com/longvo92/dbc-compare-tool)
+[longvo92/dbc-compare-tool](https://github.com/longvo92/dbc-compare-tool)
 
 DBC Compare Tool so sánh hai phiên bản cơ sở dữ liệu CAN. Tool giúp bạn kiểm tra message, signal và route ECU nào thay đổi giữa baseline OLD và NEW trước khi tích hợp DBC mới.
 

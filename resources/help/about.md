@@ -2,7 +2,7 @@
 
 **Version {version}** · Developed by **Long Vo Thien** · MIT License
 
-[Original repository: longvo92/dbc-compare-tool](https://github.com/longvo92/dbc-compare-tool)
+[longvo92/dbc-compare-tool](https://github.com/longvo92/dbc-compare-tool)
 
 DBC Compare Tool compares two versions of a CAN database. Use it to see which messages, signals and ECU routes changed between the OLD and NEW baselines before integrating a DBC update.
 
