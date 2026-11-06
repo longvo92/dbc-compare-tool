@@ -3,7 +3,7 @@
 ## GUI
 
 1. Choose **Files** or **Folders**; select the OLD and NEW inputs of the same type.
-2. Choose the **GUI Language** and **Report Language**. The report follows the GUI by default. Leave **Report Path** empty to save `compared_<old>_vs_<new>.xlsx` beside NEW, or choose an explicit `.xlsx` path.
+2. Open **Settings → Language…** to choose the **GUI Language** and **Report Language**. The report follows the GUI by default. Leave **Report Path** empty to save `compared_<old>_vs_<new>.xlsx` beside NEW, or choose an explicit `.xlsx` path.
 3. Optional: in folder mode, use **Manual Pairing…** to force DBC pairs or mark OLD files **Removed**. Saved mappings override automatic matching, including Removed rows. Unlisted OLD files are removed; unreferenced NEW files are added.
 4. In **ECU Pairing…**, select nodes to rename; leave other nodes at **Keep original name**. Original names remain in the report.
 5. Enable **ECU Focus** to scan both inputs, then check the nodes to include. Use **Select ECUs…** to edit the selection. Changing the inputs or the ECU mapping clears the selected nodes.

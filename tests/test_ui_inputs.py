@@ -15,8 +15,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
     from PySide6.QtCore import QSettings, Qt, QTimer
+    from PySide6.QtGui import QColor, QPalette
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QDialog
+    from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QGroupBox, QLabel, QScrollArea
 except ImportError:
     HAS_QT = False
 else:
@@ -28,6 +29,7 @@ else:
         EcuPairingDialog,
         MainWindow,
         ManualPairingDialog,
+        _configure_appearance,
     )
 
 
@@ -215,11 +217,72 @@ class GuiInputTests(unittest.TestCase):
                     self.assertNotEqual(row[f"Old {entity} Name"], row[f"New {entity} Name"])
         self.assertTrue({"Added", "Removed", "Renamed"}.issubset(kinds))
 
+    def test_language_dialog_is_in_settings_before_help_and_respects_cancel(self):
+        self.assertEqual([action.text() for action in self.window.menuBar().actions()], ["Settings", "Help"])
+        action, = self.window.settings_menu.actions()
+        self.assertEqual(action.text(), "Language…")
+        self.assertEqual(self.window.centralWidget().findChildren(QComboBox), [self.window.input_mode])
+
+        def choose_languages(dialog, accepted):
+            self.assertEqual(dialog.windowTitle(), "Language")
+            gui, report = dialog.findChildren(QComboBox)
+            self.assertEqual((gui.currentData(), report.currentData()), ("en", "gui"))
+            gui.setCurrentIndex(gui.findData("vi"))
+            report.setCurrentIndex(report.findData("en"))
+            return QDialog.DialogCode.Accepted if accepted else QDialog.DialogCode.Rejected
+
+        with patch.object(QDialog, "exec", new=lambda dialog: choose_languages(dialog, False)):
+            action.trigger()
+        self.assertEqual(self.window.run_button.text(), "Run Compare")
+        self.assertIsNone(self.settings.value("gui_language"))
+        with patch.object(QDialog, "exec", new=lambda dialog: choose_languages(dialog, True)):
+            action.trigger()
+        self.assertEqual([item.text() for item in self.window.menuBar().actions()], ["Cài đặt", "Trợ giúp"])
+        self.assertEqual(action.text(), "Ngôn ngữ…")
+        self.assertEqual(self.window.run_button.text(), "Chạy so sánh")
+        self.assertEqual(self.settings.value("gui_language"), "vi")
+        self.assertEqual(self.settings.value("report_language"), "en")
+
+    def test_dark_system_palette_does_not_leak_into_workspace(self):
+        previous_palette = self.app.palette()
+        previous_style = self.app.style().objectName()
+        previous_sheet = self.app.styleSheet()
+
+        def restore():
+            self.app.setStyle(previous_style)
+            self.app.setPalette(previous_palette)
+            self.app.setStyleSheet(previous_sheet)
+
+        self.addCleanup(restore)
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Window, QColor("#202020"))
+        palette.setColor(QPalette.ColorRole.Base, QColor("#161616"))
+        self.app.setPalette(palette)
+        _configure_appearance(self.app)
+        self.window._set_languages("vi", "gui")
+        self.window.show()
+        for width, height in ((720, 520), (1000, 780)):
+            with self.subTest(width=width, height=height):
+                self.window.resize(width, height)
+                self.app.processEvents()
+                scroll = self.window.findChild(QScrollArea, "workspaceScroll")
+                self.assertEqual(scroll.horizontalScrollBar().maximum(), 0)
+                pixel = scroll.viewport().grab().toImage().pixelColor(0, 0)
+                self.assertEqual(pixel.name(), "#f4f6fb")
+                for card in scroll.findChildren(QGroupBox, "sectionCard"):
+                    title = card.findChild(QLabel, "sectionTitle")
+                    self.assertTrue(card.rect().contains(title.geometry()))
+                    self.assertGreater(title.y(), 0)
+                button = self.window.focus_button
+                self.assertLessEqual(button.width(), button.sizeHint().width() + 2)
+                self.assertFalse(button.isEnabled())
+                self.assertTrue(self.window.run_button.isVisible())
+
     def test_language_preference_and_report_language_are_independent(self):
         self._files()
         self._save_maps()
         self.window._focus_nodes = {"Receiver"}
-        self.window.gui_language.setCurrentIndex(self.window.gui_language.findData("vi"))
+        self.window._set_languages("vi", "gui")
         self.assertEqual(self.window.run_button.text(), "Chạy so sánh")
         self.assertEqual(self.window.old_input.text(), str(self.old))
         self.assertEqual(self.window._saved_ecu_map, {"OldNode": "NewNode"})
@@ -229,13 +292,11 @@ class GuiInputTests(unittest.TestCase):
             ("en", "vi", "Tổng quan"), ("en", "gui", "Summary"),
         ):
             with self.subTest(gui=gui, report=report):
-                self.window.gui_language.setCurrentIndex(self.window.gui_language.findData(gui))
-                self.window.report_language.setCurrentIndex(self.window.report_language.findData(report))
+                self.window._set_languages(gui, report)
                 output = self.root / f"{gui}_{report}.xlsx"
                 self.window.output_input.setText(str(output))
                 self.window._run_compare()
-                self.assertFalse(self.window.gui_language.isEnabled())
-                self.assertFalse(self.window.report_language.isEnabled())
+                self.assertFalse(self.window.language_action.isEnabled())
                 self._wait_until(lambda: self.window.run_button.isEnabled())
                 workbook = load_workbook(output)
                 try:
@@ -243,13 +304,12 @@ class GuiInputTests(unittest.TestCase):
                 finally:
                     workbook.close()
 
-        self.window.gui_language.setCurrentIndex(self.window.gui_language.findData("vi"))
-        self.window.report_language.setCurrentIndex(self.window.report_language.findData("en"))
+        self.window._set_languages("vi", "en")
         with patch(f"{_UI}.QSettings", return_value=self.settings):
             restored = MainWindow()
         self.addCleanup(restored.deleteLater)
-        self.assertEqual(restored.gui_language.currentData(), "vi")
-        self.assertEqual(restored.report_language.currentData(), "en")
+        self.assertEqual(restored._gui_language, "vi")
+        self.assertEqual(restored._report_language, "en")
         self.assertEqual(restored.run_button.text(), "Chạy so sánh")
         self.assertEqual(restored.new_input.text(), str(self.new))
 
@@ -264,7 +324,7 @@ class GuiInputTests(unittest.TestCase):
         self.new.write_text(self.new.read_text(encoding="utf-8").replace("(1,0)", "(2,0)"), encoding="utf-8")
 
         def choose_receiver(dialog):
-            self.assertFalse(self.window.gui_language.isEnabled())
+            self.assertFalse(self.window.language_action.isEnabled())
             items = [dialog.nodes.item(index) for index in range(dialog.nodes.count())]
             self.assertTrue(any("OLD OldNode → NEW NewNode" in item.text() for item in items))
             dialog._search("receiver")
@@ -277,7 +337,7 @@ class GuiInputTests(unittest.TestCase):
             self.assertIsInstance(self.window.ecu_worker, EcuDiscoveryWorker)
             self._wait_until(lambda: self.window.run_button.isEnabled())
         self.assertEqual(self.window.focus_hint.text(), "Receiver")
-        self.window.report_language.setCurrentIndex(self.window.report_language.findData("vi"))
+        self.window._set_languages("en", "vi")
         gui_path, cli_path = self.root / "gui.xlsx", self.root / "cli.xlsx"
         self.window.output_input.setText(str(gui_path))
         self.window._run_compare()

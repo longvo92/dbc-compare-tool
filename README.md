@@ -73,7 +73,7 @@ From the repository folder, start the GUI with `.\run_gui.bat`, or run the CLI:
 - Add `--include-unchanged` to include the full inventory.
 - Add `--ecu-pair OLD=NEW` for renamed ECU nodes. Repeat for multiple pairs.
 - Use `--list-ecus` to scan both inputs, then repeat `--ecu-focus NODE` for the nodes you want in the report. Focus includes Tx and signal-level Rx on either baseline.
-- Use `--report-language vi` for a Vietnamese Excel report. In the GUI, choose the display and report languages independently.
+- Use `--report-language vi` for a Vietnamese Excel report. In the GUI, choose the display and report languages in **Settings → Language…**.
 
 ## Review the results
 

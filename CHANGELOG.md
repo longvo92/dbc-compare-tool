@@ -12,7 +12,7 @@ for the procedure.
 
 ### Added
 
-- Choose English or Vietnamese independently for the GUI and Excel report.
+- Choose English or Vietnamese independently for the GUI and Excel report under **Settings → Language…**.
 - Focus on Tx/Rx changes for selected ECU nodes. Discover nodes and apply the same focus from the CLI.
 
 ### Changed

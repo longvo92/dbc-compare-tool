@@ -3,7 +3,7 @@
 ## GUI
 
 1. Chọn chế độ **File** hoặc **Folder**, rồi chọn hai baseline OLD và NEW.
-2. Chọn **Ngôn ngữ GUI** và **Ngôn ngữ report**. Report mặc định theo GUI.
+2. Mở **Cài đặt → Ngôn ngữ…** để chọn **Ngôn ngữ GUI** và **Ngôn ngữ report**. Report mặc định theo GUI.
 3. Để trống đường dẫn report để lưu cạnh NEW với tên `compared_<old>_vs_<new>.xlsx`. Tên tự động dùng tên folder hoặc tên file bỏ đuôi `.dbc`. Chọn đường dẫn `.xlsx` nếu muốn đặt tên riêng.
 4. Trong chế độ Folder, dùng **Ghép cặp DBC thủ công…** khi cần chọn cặp cụ thể hoặc đánh dấu file OLD đã xóa. Dùng **Ghép cặp ECU…** để ghép các node đã đổi tên. Report giữ tên node gốc.
 5. Bật **ECU focus** để quét node trong hai baseline. Chọn một hoặc nhiều node. Dùng **Chọn ECU…** để sửa danh sách. Đổi input hoặc cặp ECU sẽ xóa lựa chọn focus.

@@ -6,7 +6,7 @@ from functools import partial
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSettings, QThread, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QColor, QIcon, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QProgressBar,
     QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
@@ -39,7 +41,7 @@ from dbc_compare_tool.core.discovery import collect_dbc_files
 from dbc_compare_tool.core.ecu import scan_ecu_inputs, validate_ecu_map
 from dbc_compare_tool.core.focus import apply_ecu_focus
 from dbc_compare_tool.core.models import ComparisonResult, Diagnostic
-from dbc_compare_tool.i18n import translate
+from dbc_compare_tool.i18n import LANGUAGES, translate
 from dbc_compare_tool.report.excel import default_report_path, write_excel_report
 from dbc_compare_tool.ui.ecu_focus import EcuFocusDialog
 from dbc_compare_tool.ui.widgets import DropLineEdit, NoWheelComboBox, dialog_buttons
@@ -64,7 +66,7 @@ def _changelog_path() -> Path:
 
 
 _STYLESHEET = """
-QMainWindow, QDialog {
+QMainWindow, QDialog, QWidget#workspaceContent, QWidget#workspaceViewport {
     background-color: #f4f6fb;
 }
 QWidget {
@@ -123,19 +125,14 @@ QPushButton#primaryButton {
 QPushButton#primaryButton:hover { background: #1d4fd7; }
 QPushButton#primaryButton:pressed { background: #1a46bd; }
 QPushButton#primaryButton:disabled { background: #a5bdf2; color: #eef2fb; }
-QGroupBox {
+QGroupBox#sectionCard {
     background: #ffffff;
     border: 1px solid #e1e5ee;
     border-radius: 8px;
-    margin-top: 10px;
-    padding: 12px 14px 10px 14px;
-    font-weight: 600;
-    color: #334155;
 }
-QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 12px;
-    padding: 0 4px;
+QLabel#sectionTitle {
+    color: #334155;
+    font-weight: 600;
 }
 QCheckBox {
     spacing: 6px;
@@ -181,6 +178,7 @@ QMenuBar::item {
     border-radius: 4px;
 }
 QMenuBar::item:selected { background: #e3ecfd; }
+QMenuBar::item:disabled { color: #64748b; }
 QMenu {
     background: #ffffff;
     border: 1px solid #d4d9e4;
@@ -196,7 +194,7 @@ QStatusBar {
     background: #eef1f8;
     color: #4b5563;
 }
-QTableWidget {
+QTableWidget, QListWidget {
     background: #ffffff;
     border: 1px solid #e1e5ee;
     border-radius: 6px;
@@ -214,9 +212,10 @@ QComboBox {
     background: #ffffff;
     border: 1px solid #d4d9e4;
     border-radius: 6px;
-    padding: 4px 8px;
+    padding: 5px 28px 5px 9px;
 }
 QComboBox:focus { border: 1px solid #2563eb; }
+QComboBox:disabled { color: #64748b; background: #f1f5f9; }
 QComboBox QAbstractItemView {
     background: #ffffff;
     border: 1px solid #d4d9e4;
@@ -236,10 +235,24 @@ QPlainTextEdit {
     font-size: 9pt;
 }
 QPlainTextEdit:focus { border: 1px solid #2563eb; }
-QScrollArea {
-    background: transparent;
+QScrollArea#workspaceScroll {
+    background: #f4f6fb;
     border: none;
 }
+QScrollArea#workspaceScroll QScrollBar:vertical {
+    background: #f4f6fb;
+    width: 10px;
+}
+QScrollArea#workspaceScroll QScrollBar::handle:vertical {
+    background: #c5cddd;
+    min-height: 28px;
+    border-radius: 4px;
+}
+QScrollArea#workspaceScroll QScrollBar::handle:vertical:hover { background: #9ba9c1; }
+QScrollArea#workspaceScroll QScrollBar::add-line:vertical,
+QScrollArea#workspaceScroll QScrollBar::sub-line:vertical { height: 0; }
+QScrollArea#workspaceScroll QScrollBar::add-page:vertical,
+QScrollArea#workspaceScroll QScrollBar::sub-page:vertical { background: transparent; }
 """
 
 
@@ -248,12 +261,13 @@ def _read_resource_text(filename: str) -> str:
 
 
 def _scrollable(content: QWidget) -> QScrollArea:
-    """Wrap a tab's content so a small window scrolls instead of crushing it."""
+    """Keep the workspace scrollable and give its backing surfaces the app background."""
     scroll = QScrollArea()
+    scroll.setObjectName("workspaceScroll")
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-    scroll.viewport().setAutoFillBackground(False)
-    content.setAutoFillBackground(False)
+    scroll.viewport().setObjectName("workspaceViewport")
+    content.setObjectName("workspaceContent")
     scroll.setWidget(content)
     return scroll
 
@@ -541,19 +555,11 @@ class MainWindow(QMainWindow):
         self._pending_output_path: Path | None = None
         self.last_report: Path | None = None
         self._settings = QSettings("DbcCompareTool", "DBCCompareTool")
-        self._gui_language = "en"
+        self._gui_language = self._language_preference("gui_language", LANGUAGES, "en")
+        self._report_language = self._language_preference("report_language", ("gui", *LANGUAGES), "gui")
         self._pending_report_language = "en"
         self._text_bindings = []
         self._status = ("Ready to compare", {})
-        self.gui_language = NoWheelComboBox()
-        self.report_language = NoWheelComboBox()
-        self.report_language.addItem("Follow GUI", "gui")
-        for combo in (self.gui_language, self.report_language):
-            combo.addItem("English", "en")
-            combo.addItem("Tiếng Việt", "vi")
-        for combo, key in ((self.gui_language, "gui_language"), (self.report_language, "report_language")):
-            index = combo.findData(self._settings.value(key))
-            combo.setCurrentIndex(max(0, index))
 
         self.old_input = DropLineEdit()
         self.new_input = DropLineEdit()
@@ -607,6 +613,10 @@ class MainWindow(QMainWindow):
         self._restore_paths()
         self._update_language()
 
+    def _language_preference(self, key: str, choices: tuple[str, ...], default: str) -> str:
+        value = self._settings.value(key, default, type=str)
+        return value if value in choices else default
+
     def _tr(self, key: str, **parameters: object) -> str:
         return translate(self._gui_language, key, **parameters)
 
@@ -616,25 +626,64 @@ class MainWindow(QMainWindow):
 
     def _text_widget(self, widget_type, key: str):
         widget = widget_type()
-        self._bind_text(widget.setTitle if isinstance(widget, QGroupBox) else widget.setText, key)
+        self._bind_text(widget.setText, key)
         return widget
 
     def _update_language(self) -> None:
-        self._gui_language = self.gui_language.currentData()
         for setter, key in self._text_bindings:
             setter(self._tr(key))
         self.input_mode.setItemText(self.input_mode.findData("folders"), self._tr("Folders"))
         self.input_mode.setItemText(self.input_mode.findData("files"), self._tr("Files"))
-        self.report_language.setItemText(0, self._tr("Follow GUI"))
         self._update_input_labels()
         self._update_focus_controls()
         status, parameters = self._status
         self._set_status(status, **parameters)
 
-    def _save_language(self) -> None:
-        self._settings.setValue("gui_language", self.gui_language.currentData())
-        self._settings.setValue("report_language", self.report_language.currentData())
+    def _set_languages(self, gui_language: str, report_language: str) -> None:
+        self._gui_language = gui_language
+        self._report_language = report_language
+        self._settings.setValue("gui_language", gui_language)
+        self._settings.setValue("report_language", report_language)
         self._update_language()
+
+    def _show_language_settings(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self._tr("Language"))
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(14)
+        form = QFormLayout()
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(10)
+        combos = []
+        for key, current, follow_gui in (
+            ("GUI Language", self._gui_language, False),
+            ("Report Language", self._report_language, True),
+        ):
+            combo = NoWheelComboBox(dialog)
+            if follow_gui:
+                combo.addItem(self._tr("Follow GUI"), "gui")
+            combo.addItem("English", "en")
+            combo.addItem("Tiếng Việt", "vi")
+            combo.setCurrentIndex(combo.findData(current))
+            label = QLabel(self._tr(key))
+            label.setBuddy(combo)
+            combo.setAccessibleName(label.text())
+            form.addRow(label, combo)
+            combos.append(combo)
+        layout.addLayout(form)
+
+        buttons = dialog_buttons(
+            self._gui_language, QDialogButtonBox.StandardButton.Save, QDialogButtonBox.StandardButton.Cancel,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        try:
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self._set_languages(combos[0].currentData(), combos[1].currentData())
+        finally:
+            dialog.deleteLater()
 
     def _set_status(self, key: str, **parameters: object) -> None:
         self._status = (key, parameters)
@@ -643,6 +692,12 @@ class MainWindow(QMainWindow):
         self.run_status.setText(self._tr(key, **parameters))
 
     def _build_menu(self) -> None:
+        self.settings_menu = self.menuBar().addMenu("")
+        self._bind_text(self.settings_menu.setTitle, "Settings")
+        self.language_action = self.settings_menu.addAction("")
+        self._bind_text(self.language_action.setText, "Language…")
+        self.language_action.triggered.connect(self._show_language_settings)
+
         help_menu = self.menuBar().addMenu("Help")
         user_guide_action = help_menu.addAction("User Guide")
         changelog_action = help_menu.addAction("Changelog")
@@ -660,6 +715,23 @@ class MainWindow(QMainWindow):
             "About", "help/about_vi.md" if self._gui_language == "vi" else "help/about.md",
         ))
 
+    def _section(self, key: str) -> tuple[QGroupBox, QGridLayout]:
+        card = QGroupBox()
+        card.setObjectName("sectionCard")
+        self._bind_text(card.setAccessibleName, key)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.setSpacing(12)
+        title = self._text_widget(QLabel, key)
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+        form = QGridLayout()
+        form.setHorizontalSpacing(8)
+        form.setVerticalSpacing(8)
+        form.setColumnStretch(1, 1)
+        layout.addLayout(form)
+        return card, form
+
     def _build_layout(self) -> None:
         # Header
         title = self._text_widget(QLabel, "DBC Compare Tool")
@@ -676,31 +748,20 @@ class MainWindow(QMainWindow):
 
         subtitle = self._text_widget(QLabel, "Compare DBC baselines. Review message and signal changes in Excel.")
         subtitle.setObjectName("appSubtitle")
+        subtitle.setWordWrap(True)
 
         header = QVBoxLayout()
         header.setSpacing(2)
         header.addLayout(title_row)
         header.addWidget(subtitle)
-        languages = QHBoxLayout()
-        for key, combo in (("GUI Language", self.gui_language), ("Report Language", self.report_language)):
-            label = self._text_widget(QLabel, key)
-            label.setBuddy(combo)
-            self._bind_text(combo.setAccessibleName, key)
-            languages.addWidget(label)
-            languages.addWidget(combo)
-        languages.addStretch()
-        header.addLayout(languages)
-
         # Baselines and report settings follow the comparison workflow.
-        input_group = self._text_widget(QGroupBox, "Baselines")
-        form = QGridLayout(input_group)
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(8)
+        input_group, form = self._section("Baselines")
 
         mode_label = self._text_widget(QLabel, "Input Type")
         mode_label.setBuddy(self.input_mode)
         form.addWidget(mode_label, 0, 0)
-        form.addWidget(self.input_mode, 0, 1)
+        self.input_mode.setMinimumWidth(140)
+        form.addWidget(self.input_mode, 0, 1, alignment=Qt.AlignmentFlag.AlignLeft)
 
         old_label = self.old_label = QLabel()
         old_label.setBuddy(self.old_input)
@@ -719,6 +780,7 @@ class MainWindow(QMainWindow):
         form.addWidget(new_button, 2, 2)
 
         pairing_row = QHBoxLayout()
+        pairing_row.setSpacing(8)
         pairing_hint = self.pairing_hint = QLabel()
         pairing_hint.setObjectName("hintLabel")
         pairing_hint.setWordWrap(True)
@@ -726,12 +788,8 @@ class MainWindow(QMainWindow):
         pairing_row.addWidget(self.manual_pair_button)
         pairing_row.addWidget(self.ecu_pair_button)
         form.addLayout(pairing_row, 3, 0, 1, 3)
-        form.setColumnStretch(1, 1)
 
-        report_group = self._text_widget(QGroupBox, "Report")
-        report_form = QGridLayout(report_group)
-        report_form.setHorizontalSpacing(10)
-        report_form.setVerticalSpacing(10)
+        report_group, report_form = self._section("Report")
         output_label = self._text_widget(QLabel, "Report Path (optional)")
         output_label.setBuddy(self.output_input)
         self._bind_text(self.output_input.setAccessibleName, "Report Path (optional)")
@@ -742,12 +800,11 @@ class MainWindow(QMainWindow):
         self._bind_text(output_button.setAccessibleName, "Browse report output path")
         output_button.clicked.connect(self._choose_report)
         report_form.addWidget(output_button, 0, 2)
-        report_form.setColumnStretch(1, 1)
         report_form.addWidget(self.chk_include_unchanged, 1, 0, 1, 3)
         self._browse_buttons = (old_button, new_button, output_button)
 
         filter_layout = QHBoxLayout()
-        filter_layout.setSpacing(16)
+        filter_layout.setSpacing(10)
         filter_label = self._text_widget(QLabel, "Change types")
         filter_label.setObjectName("hintLabel")
         filter_layout.addWidget(filter_label)
@@ -761,10 +818,12 @@ class MainWindow(QMainWindow):
         self.report_hint.setVisible(False)
         report_form.addWidget(self.report_hint, 3, 0, 1, 3)
         focus_row = QHBoxLayout()
+        focus_row.setSpacing(12)
         focus_row.addWidget(self.focus_checkbox)
         focus_row.addWidget(self.focus_button)
-        focus_row.addWidget(self.focus_hint, 1)
+        focus_row.addStretch()
         report_form.addLayout(focus_row, 4, 0, 1, 3)
+        report_form.addWidget(self.focus_hint, 5, 0, 1, 3)
 
         # Action buttons
         self.run_button.setObjectName("primaryButton")
@@ -796,7 +855,10 @@ class MainWindow(QMainWindow):
         self.log_view.setObjectName("logView")
         self.log_view.setReadOnly(True)
         self._bind_text(self.log_view.setPlaceholderText, "Comparison progress and results will appear here.")
-        self.log_view.setMinimumHeight(140)
+        self.log_view.setMinimumHeight(120)
+        # Let the log fill the remaining space without forcing its size hint
+        # onto the height-for-width layout of the scroll area.
+        self.log_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
 
         log_label = self._text_widget(QLabel, "Execution Log")
         log_label.setObjectName("hintLabel")
@@ -809,7 +871,7 @@ class MainWindow(QMainWindow):
         baseline_layout.addWidget(input_group)
         baseline_layout.addWidget(report_group)
         baseline_layout.addWidget(log_label)
-        baseline_layout.addWidget(self.log_view)
+        baseline_layout.addWidget(self.log_view, 1)
         baseline_tab = _scrollable(baseline_content)
 
         central = QWidget()
@@ -823,7 +885,7 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         focus_order = (
-            self.gui_language, self.report_language, self.input_mode,
+            self.input_mode,
             self.old_input, old_button, self.new_input, new_button,
             self.manual_pair_button, self.ecu_pair_button, self.output_input, output_button,
             self.chk_include_unchanged, self.chk_added, self.chk_removed,
@@ -845,8 +907,6 @@ class MainWindow(QMainWindow):
         for field in (self.old_input, self.new_input):
             field.textChanged.connect(self._update_output_hint)
             field.textChanged.connect(self._clear_focus)
-        self.gui_language.currentIndexChanged.connect(self._save_language)
-        self.report_language.currentIndexChanged.connect(self._save_language)
         self.focus_checkbox.toggled.connect(self._toggle_focus)
         self.focus_button.clicked.connect(self._open_ecu_focus)
 
@@ -1142,8 +1202,9 @@ class MainWindow(QMainWindow):
             return
 
         self._pending_output_path = output_path
-        report_language = self.report_language.currentData()
-        self._pending_report_language = self._gui_language if report_language == "gui" else report_language
+        self._pending_report_language = (
+            self._gui_language if self._report_language == "gui" else self._report_language
+        )
         self.log_view.clear()
         pairing = (
             "direct file comparison" if self._files_mode()
@@ -1175,8 +1236,9 @@ class MainWindow(QMainWindow):
         self.manual_pair_button.setEnabled(enabled and not self._files_mode())
         self.ecu_pair_button.setEnabled(enabled)
         self.input_mode.setEnabled(enabled)
-        for control in (self.gui_language, self.report_language, self.focus_checkbox):
-            control.setEnabled(enabled)
+        self.settings_menu.setEnabled(enabled)
+        self.language_action.setEnabled(enabled)
+        self.focus_checkbox.setEnabled(enabled)
         self._update_focus_controls()
         self.chk_include_unchanged.setEnabled(enabled)
         for control in (self.old_input, self.new_input, self.output_input, *self._browse_buttons):
@@ -1317,12 +1379,53 @@ class MainWindow(QMainWindow):
         self.log_view.append(message)
 
 
+def _configure_appearance(app: QApplication) -> None:
+    """Keep styled widgets and their native subcontrols on the same palette."""
+    app.setStyle("Fusion")
+    palette = app.style().standardPalette()
+    for role, color in (
+        (QPalette.ColorRole.Window, "#f4f6fb"),
+        (QPalette.ColorRole.Base, "#ffffff"),
+        (QPalette.ColorRole.AlternateBase, "#f4f6fb"),
+        (QPalette.ColorRole.Button, "#ffffff"),
+        (QPalette.ColorRole.WindowText, "#1f2430"),
+        (QPalette.ColorRole.Text, "#1f2430"),
+        (QPalette.ColorRole.ButtonText, "#1f2430"),
+        (QPalette.ColorRole.PlaceholderText, "#64748b"),
+        (QPalette.ColorRole.Highlight, "#2563eb"),
+        (QPalette.ColorRole.HighlightedText, "#ffffff"),
+        (QPalette.ColorRole.ToolTipBase, "#ffffff"),
+        (QPalette.ColorRole.ToolTipText, "#1f2430"),
+    ):
+        palette.setColor(role, QColor(color))
+    for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
+        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor("#64748b"))
+    app.setPalette(palette)
+    arrow = _resource_path("chevron-down.svg")
+    stylesheet = _STYLESHEET
+    if arrow.is_file() and not QPixmap(str(arrow)).isNull():
+        stylesheet += """
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 25px;
+    border: none;
+}
+QComboBox::down-arrow {
+    image: url("ARROW_PATH");
+    width: 10px;
+    height: 6px;
+}
+""".replace("ARROW_PATH", arrow.as_posix())
+    app.setStyleSheet(stylesheet)
+
+
 def main() -> int:
     app = QApplication(sys.argv)
     icon_path = _resource_path("app.ico")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
-    app.setStyleSheet(_STYLESHEET)
+    _configure_appearance(app)
     window = MainWindow()
     window.show()
     return app.exec()
