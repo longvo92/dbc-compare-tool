@@ -1,0 +1,147 @@
+name: Release
+
+# Cutting a release is two moves, on purpose.
+#
+#   1. A normal PR bumps the version in src/dbc_compare_tool/__init__.py and
+#      pyproject.toml, and adds the "## [X.Y.Z] - <date>" section at the top of
+#      CHANGELOG.md, moving anything under [Unreleased] into it. A human merges it.
+#   2. This workflow is triggered against main:
+#
+#        gh workflow run release.yml -f version=0.2.0                  # rehearsal
+#        gh workflow run release.yml -f version=0.2.0 -f publish=true  # for real
+#        gh run watch
+#
+# The default does NOT publish: a run with no `publish` builds the artifacts,
+# proves they start, and stops — so the expensive half can be checked without
+# creating a tag that cannot be taken back.
+#
+# Nothing here edits the repo. The version comes from files that were reviewed
+# in step 1, and scripts/release_check.py refuses if they disagree with the
+# version being asked for — the same script you can run locally first:
+#
+#   python scripts/release_check.py 0.2.0
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 0.2.0 (already merged to main)'
+        required: true
+        type: string
+      publish:
+        description: 'Create the tag and the GitHub release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Windows because PyInstaller does not cross-compile and the shipped
+    # artifact is a Windows .exe
+    runs-on: windows-latest
+    env:
+      # The app is a Qt GUI; the runner has no display
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # tags, so an already-used version can be refused
+
+      - name: Releases come from main
+        shell: bash
+        run: |
+          test "${{ github.ref }}" = "refs/heads/main" || {
+            echo "::error::triggered on ${{ github.ref }}; re-run with --ref main"
+            exit 1
+          }
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Same script a person runs before triggering, so the answer here is never
+      # a surprise: the version matches __init__.py and pyproject.toml, CHANGELOG.md
+      # documents it as the newest release, and [Unreleased] is empty.
+      - name: Check the version is ready
+        shell: bash
+        run: python scripts/release_check.py "${{ inputs.version }}" --notes RELEASE_NOTES.md
+
+      - name: Refuse a version that was already tagged
+        shell: bash
+        run: |
+          if git rev-parse -q --verify "refs/tags/v${{ inputs.version }}" >/dev/null; then
+            echo "::error::v${{ inputs.version }} already exists; releases are not moved"
+            exit 1
+          fi
+
+      - name: Install the project and the build tool
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      # main is already green, but a release is the one build where "the tests
+      # ran" is worth paying a minute for
+      - name: Run the suite
+        run: python -m pytest -q
+
+      - name: Run the engine and window smoke test
+        run: python scripts/smoke.py --gui
+
+      - name: Build the exe
+        run: python scripts/build.py
+
+      # The exe gets started, not just built. A PyInstaller bundle that is
+      # missing a module fails here and nowhere else — the unit suite imports
+      # from source and never sees it.
+      - name: Start the exe
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+
+          function Start-AndCheck($name, $file, $arguments) {
+            # Start-Process refuses an empty -ArgumentList, hence the branch
+            if ($arguments) {
+              $process = Start-Process -FilePath $file -ArgumentList $arguments -PassThru
+            } else {
+              $process = Start-Process -FilePath $file -PassThru
+            }
+            Start-Sleep -Seconds 25
+            if ($process.HasExited) {
+              Write-Output "::error::the $name exited with $($process.ExitCode) instead of staying up"
+              exit 1
+            }
+            Stop-Process -Id $process.Id -Force
+            Write-Output "$name started and was still running after 25s"
+          }
+
+          Start-AndCheck "exe" "dist/DbcCompareTool-$version.exe" $null
+
+      # uploaded on a rehearsal too: the point of a rehearsal is being able to
+      # look at what would have shipped
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DbcCompareTool-${{ inputs.version }}
+          path: |
+            dist/DbcCompareTool-${{ inputs.version }}.exe
+            RELEASE_NOTES.md
+
+      - name: Publish
+        if: inputs.publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ inputs.version }}" \
+            --target "${{ github.sha }}" \
+            --title "v${{ inputs.version }}" \
+            --notes-file RELEASE_NOTES.md \
+            "dist/DbcCompareTool-${{ inputs.version }}.exe"
+
+      - name: Rehearsal only
+        if: ${{ !inputs.publish }}
+        shell: bash
+        run: |
+          echo "Built and verified v${{ inputs.version }}; nothing was published."
+          echo "Re-run with -f publish=true to tag and release."

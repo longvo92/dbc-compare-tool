@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+from collections import Counter
+from pathlib import Path
+
+from .discovery import collect_dbc_files
+from .models import DbcDatabase, Diagnostic
+from .parser import UNDEFINED_NODE, DbcParseError, parse_dbc
+
+
+def database_ecu_nodes(database: DbcDatabase) -> set[str]:
+    """Include declared nodes and nodes referenced only by message/signal routing."""
+    nodes = set(database.nodes)
+    for message in database.messages.values():
+        nodes.update(node.strip() for node in message.transmitter.split(","))
+        for signal in message.signals.values():
+            nodes.update(signal.receivers)
+    return nodes - {"", UNDEFINED_NODE}
+
+
+def validate_dbc_input(path: Path) -> None:
+    if not path.exists():
+        raise FileNotFoundError(f"Input path does not exist: {path}")
+    if not path.is_dir() and not (path.is_file() and path.suffix.lower() == ".dbc"):
+        raise ValueError(f"Input must be a folder or a .dbc file: {path}")
+
+
+def scan_ecu_inputs(
+    old_path: Path, new_path: Path,
+) -> tuple[list[str], list[str], list[Diagnostic]]:
+    old_path, new_path = Path(old_path), Path(new_path)
+    for path in (old_path, new_path):
+        validate_dbc_input(path)
+    if old_path.is_dir() != new_path.is_dir():
+        raise ValueError("Select two folders or two .dbc files; file/folder inputs cannot be mixed")
+    old_nodes, old_errors = _scan_ecu_nodes(old_path, "OLD")
+    new_nodes, new_errors = _scan_ecu_nodes(new_path, "NEW")
+    return old_nodes, new_nodes, old_errors + new_errors
+
+
+def _scan_ecu_nodes(path: Path, side: str) -> tuple[list[str], list[Diagnostic]]:
+    validate_dbc_input(path)
+    if path.is_file():
+        return sorted(database_ecu_nodes(parse_dbc(path))), []
+    nodes: set[str] = set()
+    diagnostics: list[Diagnostic] = []
+    for rel, file_path in sorted(collect_dbc_files(path).items()):
+        try:
+            nodes.update(database_ecu_nodes(parse_dbc(file_path)))
+        except DbcParseError as exc:
+            diagnostics.append(Diagnostic(side, rel, str(exc)))
+    return sorted(nodes), diagnostics
+
+
+def validate_ecu_map(
+    ecu_map: dict[str, str], old_nodes: set[str] | None = None, new_nodes: set[str] | None = None,
+) -> None:
+    if any(not isinstance(node, str) or not node.strip() for pair in ecu_map.items() for node in pair):
+        raise ValueError("ECU pairs must contain non-empty OLD and NEW node names")
+    renamed_targets = (new for old, new in ecu_map.items() if old != new)
+    duplicates = sorted(node for node, count in Counter(renamed_targets).items() if count > 1)
+    if duplicates:
+        raise ValueError(f"NEW ECU nodes paired more than once: {', '.join(duplicates)}")
+    if old_nodes is None and new_nodes is None:
+        return
+    missing_old = sorted(set(ecu_map) - old_nodes) if old_nodes is not None else []
+    missing_new = sorted(set(ecu_map.values()) - new_nodes) if new_nodes is not None else []
+    if missing_old or missing_new:
+        details = []
+        if missing_old:
+            details.append(f"OLD: {', '.join(missing_old)}")
+        if missing_new:
+            details.append(f"NEW: {', '.join(missing_new)}")
+        raise ValueError(f"Paired ECU nodes not found in selected inputs ({'; '.join(details)})")
+
+
+def transmitters_match(old: str, new: str, ecu_map: dict[str, str]) -> bool:
+    if not ecu_map:
+        return old == new
+    old_nodes = tuple(sorted(ecu_map.get(node.strip(), node.strip()) for node in old.split(",")))
+    new_nodes = tuple(sorted(node.strip() for node in new.split(",")))
+    return old_nodes == new_nodes
+
+
+def receivers_match(old: tuple[str, ...], new: tuple[str, ...], ecu_map: dict[str, str]) -> bool:
+    if not ecu_map:
+        return old == new
+    return tuple(sorted(ecu_map.get(node, node) for node in old)) == tuple(sorted(new))

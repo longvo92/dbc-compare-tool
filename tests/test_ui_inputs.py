@@ -1,0 +1,855 @@
+"""GUI input modes and ECU pairing; skip in installations without optional Qt."""
+
+from __future__ import annotations
+
+import os
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+from openpyxl import load_workbook
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+try:
+    from PySide6.QtCore import QSettings, Qt, QTimer
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QGroupBox, QLabel, QScrollArea
+except ImportError:
+    HAS_QT = False
+else:
+    HAS_QT = True
+    from dbc_compare_tool.ui.compare_tab import (
+        CompareWorker,
+        EcuDiscoveryWorker,
+        EcuPairingDialog,
+        ManualPairingDialog,
+    )
+    from dbc_compare_tool.ui.ecu_focus import EcuFocusDialog
+    from dbc_compare_tool.ui.main_window import MainWindow
+    from dbc_compare_tool.ui.theme import configure_appearance
+
+
+pytestmark = pytest.mark.gui
+
+_SHELL = "dbc_compare_tool.ui.main_window"
+_UI = "dbc_compare_tool.ui.compare_tab"
+_DBC = '''VERSION ""
+BU_: {sender} Receiver Spare
+BO_ 100 Status: 8 {sender}
+ SG_ Counter : 0|8@1+ (1,0) [0|255] "" Receiver
+'''
+
+
+@unittest.skipUnless(HAS_QT, "PySide6 is unavailable")
+class GuiInputTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.old = self.root / "old.dbc"
+        self.new = self.root / "new.dbc"
+        self.old.write_text(_DBC.format(sender="OldNode"), encoding="utf-8")
+        self.new.write_text(_DBC.format(sender="NewNode"), encoding="utf-8")
+        # A store of its own: a test never reads the preferences of the installed app.
+        self.settings = QSettings(str(self.root / "settings.ini"), QSettings.Format.IniFormat)
+        self.window = MainWindow(self.settings)
+        self.tab = self.window.compare
+        self.addCleanup(self._close_window)
+
+    def _close_window(self):
+        self.tab.wait_for_workers()
+        self.window.close()
+        self.window.deleteLater()
+        self.app.processEvents()
+
+    def _files(self):
+        self.tab.input_mode.setCurrentIndex(self.tab.input_mode.findData("files"))
+        self.tab.old_input.setText(str(self.old))
+        self.tab.new_input.setText(str(self.new))
+
+    def _save_maps(self):
+        self.tab._saved_pair_map = {"old.dbc": "new.dbc"}
+        self.tab._saved_pair_folders = self.tab._current_folder_inputs()
+        self.tab._saved_ecu_map = {"OldNode": "NewNode"}
+        self.tab._saved_ecu_inputs = self.tab._current_inputs()
+
+    def _wait_until(self, condition):
+        deadline = time.monotonic() + 10
+        while not condition() and time.monotonic() < deadline:
+            QTest.qWait(10)
+        self.assertTrue(condition(), "Qt worker did not complete within 10 seconds")
+
+    def test_file_browse_selects_dbc_and_disables_manual_file_pairing(self):
+        self._files()
+        with patch(f"{_UI}.QFileDialog.getOpenFileName", return_value=(str(self.old), "")) as pick:
+            self.tab._browse_buttons[0].click()
+        self.assertIn("*.dbc", pick.call_args.args[3])
+        self.assertEqual(self.tab.old_input.text(), str(self.old))
+        self.assertFalse(self.tab.manual_pair_button.isEnabled())
+        self.assertTrue(self.tab.ecu_pair_button.isEnabled())
+        self.assertEqual(self.tab._validated_baselines(), (self.old, self.new))
+        self.assertTrue(self.tab.old_input._accepts_path(self.old))
+        self.assertFalse(self.tab.old_input._accepts_path(self.root))
+        self.assertIn("DBC", self.tab.old_label.text())
+
+    def test_folder_browse_and_complete_manual_pairing_remain_available(self):
+        folder = self.root / "baseline"
+        folder.mkdir()
+        (folder / "bus.dbc").write_text(_DBC.format(sender="OldNode"), encoding="utf-8")
+        with patch(f"{_UI}.QFileDialog.getExistingDirectory", return_value=str(folder)):
+            self.tab._browse_buttons[0].click()
+            self.tab._browse_buttons[1].click()
+        self.assertTrue(self.tab.manual_pair_button.isEnabled())
+        self.assertEqual(self.tab._validated_baselines(), (folder, folder))
+        self.assertTrue(self.tab.old_input._accepts_path(folder))
+        self.assertFalse(self.tab.old_input._accepts_path(self.old))
+        with patch(f"{_UI}.ManualPairingDialog") as dialog_type:
+            dialog_type.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialog_type.return_value.pair_map.return_value = {"bus.dbc": "bus.dbc"}
+            self.assertTrue(self.tab._open_manual_pairing())
+        self.assertEqual(self.tab._complete_manual_pairing(), {"bus.dbc": "bus.dbc"})
+        self.tab._saved_pair_map = {"bus.dbc": None}
+        self.assertEqual(self.tab._complete_manual_pairing(), {"bus.dbc": None})
+
+    def test_paths_and_input_mode_invalidate_both_saved_maps(self):
+        self._files()
+        self._save_maps()
+        self.tab.old_input.setText(str(self.new))
+        self.assertIsNone(self.tab._saved_pair_map)
+        self.assertEqual(self.tab._saved_ecu_map, {})
+        self._save_maps()
+        self.tab.input_mode.setCurrentIndex(0)
+        self.assertIsNone(self.tab._saved_pair_map)
+        self.assertIsNone(self.tab._saved_ecu_inputs)
+        self.assertEqual(self.tab._saved_ecu_map, {})
+
+    def test_file_mode_rejects_folder_and_non_dbc_inputs(self):
+        self._files()
+        for invalid in (self.root, self.root / "missing.dbc", self.root / "notes.txt"):
+            with self.subTest(invalid=invalid):
+                self.tab.new_input.setText(str(invalid))
+                with patch(f"{_UI}.QMessageBox.warning") as warning:
+                    self.assertIsNone(self.tab._validated_baselines())
+                warning.assert_called_once()
+
+    def test_input_mode_is_saved_and_restored_with_explicit_output(self):
+        self._files()
+        self.tab.output_input.setText(str(self.root / "custom.xlsx"))
+        self.tab._save_paths()
+        with patch(f"{_SHELL}.QSettings", return_value=self.settings):
+            restored = MainWindow()
+        try:
+            self.assertTrue(restored.compare._files_mode())
+            self.assertEqual(restored.compare.new_input.text(), str(self.new))
+            self.assertEqual(restored.compare.output_input.text(), str(self.root / "custom.xlsx"))
+            self.assertFalse(restored.compare.manual_pair_button.isEnabled())
+        finally:
+            restored.close()
+            restored.deleteLater()
+
+    def test_compare_files_with_ecu_map_exports_report_through_both_workers(self):
+        self._files()
+        self._save_maps()
+        self.tab.chk_include_unchanged.setChecked(True)
+        report = self.root / "report.xlsx"
+        self.tab.output_input.setText(str(report))
+        results = []
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.tab._run_compare()
+            self.tab.worker.compared.connect(results.append)
+            self.assertFalse(self.tab.input_mode.isEnabled())
+            self.assertFalse(self.tab.ecu_pair_button.isEnabled())
+            self.assertFalse(self.tab.new_input.isEnabled())
+            self.assertTrue(all(not button.isEnabled() for button in self.tab._browse_buttons))
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+        error.assert_not_called()
+        self.assertEqual(self.tab.last_report, report)
+        self.assertTrue(report.is_file())
+        self.assertEqual(results[0].ecu_map, {"OldNode": "NewNode"})
+        self.assertEqual(results[0].summary()["Total Changes"], 0)
+        self.assertTrue(results[0].include_unchanged)
+        self.assertIsNone(self.tab.worker.pair_map)
+        self.assertTrue(self.tab.input_mode.isEnabled())
+        self.assertFalse(self.tab.manual_pair_button.isEnabled())
+        self.assertTrue(self.tab.progress.isHidden())
+
+    def test_gui_export_splits_names_and_omits_added_removed_arrows(self):
+        self.assertCountEqual(
+            self.tab.findChildren(QCheckBox),
+            [self.tab.chk_include_unchanged, self.tab.focus_checkbox],
+        )
+        old_folder, new_folder = self.root / "old", self.root / "new"
+        old_folder.mkdir()
+        new_folder.mkdir()
+        old_dbc = _DBC.format(sender="Controller") + ' SG_ Removed : 8|8@1+ (1,0) [0|255] "" Receiver\n'
+        new_dbc = _DBC.format(sender="Controller").replace("Status:", "StatusNew:").replace("Counter :", "CounterNew :")
+        new_dbc += ' SG_ Added : 32|32@0- (0.01,-100) [-100|100] "degC" Spare\n'
+        fixed_signal = ' SG_ StableName : 16|8@1+ (1,0) [0|255] "" Receiver\n'
+        (old_folder / "bus.dbc").write_text(old_dbc + fixed_signal, encoding="utf-8")
+        (new_folder / "bus.dbc").write_text(new_dbc + fixed_signal.replace("(1,0)", "(2,0)"), encoding="utf-8")
+        self.tab.old_input.setText(str(old_folder))
+        self.tab.new_input.setText(str(new_folder))
+        report = self.root / "hotfix.xlsx"
+        self.tab.output_input.setText(str(report))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.tab.run_button.click()
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+        error.assert_not_called()
+        self.assertEqual(self.tab.last_report, report)
+        workbook = load_workbook(report)
+        self.addCleanup(workbook.close)
+        kinds = set()
+        for sheet_name, entity in (("Message Details", "Message"), ("Signal Details", "Signal")):
+            sheet = workbook[sheet_name]
+            headers = next(sheet.iter_rows(values_only=True))
+            self.assertIn(f"Old {entity} Name", headers)
+            self.assertIn(f"New {entity} Name", headers)
+            for cells in sheet.iter_rows(min_row=2, values_only=True):
+                row = dict(zip(headers, cells))
+                kind = row["Change Type"]
+                kinds.add(kind)
+                if kind in {"Added", "Removed"}:
+                    self.assertTrue(all("->" not in str(value) for value in row.values()))
+                elif kind == "Renamed":
+                    self.assertTrue(row[f"Old {entity} Name"])
+                    self.assertTrue(row[f"New {entity} Name"])
+                    self.assertNotEqual(row[f"Old {entity} Name"], row[f"New {entity} Name"])
+        self.assertEqual(kinds, {"Added", "Removed", "Modified", "Renamed"})
+
+    def test_settings_dialog_holds_language_and_theme_and_respects_cancel(self):
+        from dbc_compare_tool.ui import theme as app_theme
+
+        self.assertEqual([action.text() for action in self.window.menuBar().actions()],
+                         ["Settings", "Help"])
+        action = self.window.settings_action
+        self.assertEqual(action.text(), "Settings…")
+        self.assertEqual(self.tab.findChildren(QComboBox), [self.tab.input_mode])
+        self.addCleanup(app_theme.configure_appearance, self.app, "light")
+
+        def choose(dialog, accepted):
+            self.assertEqual(dialog.windowTitle(), "Settings")
+            gui, report, theme = dialog.findChildren(QComboBox)
+            self.assertEqual((gui.currentData(), report.currentData(), theme.currentData()),
+                             ("en", "gui", "system"))
+            gui.setCurrentIndex(gui.findData("vi"))
+            report.setCurrentIndex(report.findData("en"))
+            theme.setCurrentIndex(theme.findData("dark"))
+            return QDialog.DialogCode.Accepted if accepted else QDialog.DialogCode.Rejected
+
+        with patch.object(QDialog, "exec", new=lambda dialog: choose(dialog, False)):
+            action.trigger()
+        self.assertEqual(self.tab.run_button.text(), "Run Compare")
+        self.assertIsNone(self.settings.value("gui_language"))
+        self.assertEqual(app_theme.manager.theme.name, "light")
+
+        with patch.object(QDialog, "exec", new=lambda dialog: choose(dialog, True)):
+            action.trigger()
+        self.assertEqual([item.text() for item in self.window.menuBar().actions()],
+                         ["Cài đặt", "Trợ giúp"])
+        self.assertEqual(action.text(), "Cài đặt…")
+        self.assertEqual(self.tab.run_button.text(), "Chạy so sánh")
+        self.assertEqual(self.settings.value("gui_language"), "vi")
+        self.assertEqual(self.settings.value("report_language"), "en")
+        self.assertEqual(self.settings.value("theme"), "dark")
+        self.assertEqual(app_theme.manager.theme.name, "dark")
+        self.assertIn(app_theme.DARK.window, self.app.styleSheet())
+
+    def test_release_note_menu_hides_development_notes(self):
+        help_menu = self.window.menuBar().actions()[-1].menu()
+        action = next(item for item in help_menu.actions() if item.text() == "Release note")
+        changelog = self.root / "CHANGELOG.md"
+        released = "## [2.0.0] — 2026-11-06\n\nPublic note.\n\n## [1.0.0] - 2026-10-01\n\nOlder note.\n"
+        preamble = "# Changelog\n\nMaintainer instructions.\n\n## [Unreleased]\n\nDevelopment notes.\n\n"
+        with patch(f"{_SHELL}._changelog_path", return_value=changelog):
+            for content, visible in ((preamble + released, released), (preamble, "No release notes available.")):
+                changelog.write_text(content, encoding="utf-8")
+                with patch.object(self.window, "_show_markdown") as show:
+                    action.trigger()
+                show.assert_called_once_with("Release note", visible)
+
+    def test_dark_system_palette_does_not_leak_into_workspace(self):
+        previous_palette = self.app.palette()
+        previous_style = self.app.style().objectName()
+        previous_sheet = self.app.styleSheet()
+
+        def restore():
+            self.app.setStyle(previous_style)
+            self.app.setPalette(previous_palette)
+            self.app.setStyleSheet(previous_sheet)
+
+        self.addCleanup(restore)
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Window, QColor("#202020"))
+        palette.setColor(QPalette.ColorRole.Base, QColor("#161616"))
+        self.app.setPalette(palette)
+        configure_appearance(self.app)
+        self.window._set_languages("vi", "gui")
+        self.window.show()
+        for width, height in ((720, 520), (1000, 780)):
+            with self.subTest(width=width, height=height):
+                self.window.resize(width, height)
+                self.app.processEvents()
+                scroll = self.tab.findChild(QScrollArea, "workspaceScroll")
+                self.assertEqual(scroll.horizontalScrollBar().maximum(), 0)
+                pixel = scroll.viewport().grab().toImage().pixelColor(0, 0)
+                self.assertEqual(pixel.name(), "#f4f6fb")
+                for card in scroll.findChildren(QGroupBox, "sectionCard"):
+                    title = card.findChild(QLabel, "sectionTitle")
+                    self.assertTrue(card.rect().contains(title.geometry()))
+                    self.assertGreater(title.y(), 0)
+                button = self.tab.focus_button
+                self.assertLessEqual(button.width(), button.sizeHint().width() + 2)
+                self.assertFalse(button.isEnabled())
+                self.assertTrue(self.tab.run_button.isVisible())
+
+    def test_language_preference_and_report_language_are_independent(self):
+        self._files()
+        self._save_maps()
+        self.tab._focus_nodes = {"Receiver"}
+        self.window._set_languages("vi", "gui")
+        self.assertEqual(self.tab.run_button.text(), "Chạy so sánh")
+        self.assertEqual(self.tab.old_input.text(), str(self.old))
+        self.assertEqual(self.tab._saved_ecu_map, {"OldNode": "NewNode"})
+        self.assertEqual(self.tab._focus_nodes, {"Receiver"})
+        for gui, report, summary in (
+            ("vi", "gui", "Tổng quan"), ("vi", "en", "Summary"),
+            ("en", "vi", "Tổng quan"), ("en", "gui", "Summary"),
+        ):
+            with self.subTest(gui=gui, report=report):
+                self.window._set_languages(gui, report)
+                output = self.root / f"{gui}_{report}.xlsx"
+                self.tab.output_input.setText(str(output))
+                self.tab._run_compare()
+                self.assertFalse(self.window.settings_action.isEnabled())
+                self._wait_until(lambda: self.tab.run_button.isEnabled())
+                workbook = load_workbook(output)
+                try:
+                    self.assertEqual(workbook.sheetnames[0], summary)
+                finally:
+                    workbook.close()
+
+        self.window._set_languages("vi", "en")
+        restored = MainWindow(self.settings)
+        self.addCleanup(restored.deleteLater)
+        self.assertEqual(restored.gui_language, "vi")
+        self.assertEqual(restored._report_language, "en")
+        self.assertEqual(restored.compare.run_button.text(), "Chạy so sánh")
+        self.assertEqual(restored.compare.new_input.text(), str(self.new))
+
+    def test_focus_scan_exports_same_rows_as_pipeline_and_clears_stale_selection(self):
+        from dbc_compare_tool.dbc_compare.pipeline import run_comparison
+
+        self._files()
+        self._save_maps()
+        self.new.write_text(self.new.read_text(encoding="utf-8").replace("(1,0)", "(2,0)"), encoding="utf-8")
+
+        def choose_receiver(dialog):
+            self.assertFalse(self.window.settings_action.isEnabled())
+            items = [dialog.nodes.item(index) for index in range(dialog.nodes.count())]
+            self.assertTrue(any("OLD OldNode → NEW NewNode" in item.text() for item in items))
+            dialog._search("receiver")
+            dialog._select_visible()
+            self.assertEqual(dialog.selected_nodes(), {"Receiver"})
+            return QDialog.DialogCode.Accepted
+
+        with patch.object(EcuFocusDialog, "exec", choose_receiver):
+            self.tab.focus_checkbox.setChecked(True)
+            self.assertIsInstance(self.tab.ecu_worker, EcuDiscoveryWorker)
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+        self.assertEqual(self.tab.focus_hint.text(), "Receiver")
+        self.window._set_languages("en", "vi")
+        gui_path, api_path = self.root / "gui.xlsx", self.root / "api.xlsx"
+        self.tab.output_input.setText(str(gui_path))
+        self.tab._run_compare()
+        self._wait_until(lambda: self.tab.run_button.isEnabled())
+        run_comparison(self.old, self.new, api_path, ecu_map={"OldNode": "NewNode"},
+                       focus_nodes={"Receiver"}, language="vi")
+        gui, api = load_workbook(gui_path), load_workbook(api_path)
+        try:
+            details = "Chi tiết signal"
+            self.assertEqual(list(gui[details].values), list(api[details].values))
+            self.assertEqual(gui[details].max_row, 2)
+        finally:
+            gui.close()
+            api.close()
+
+        with patch(f"{_UI}.EcuPairingDialog") as pairing:
+            pairing.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            pairing.return_value.pair_map.return_value = {}
+            self.tab._open_ecu_pairing()
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+        self.assertEqual(self.tab._focus_nodes, set())
+        with patch(f"{_UI}.QMessageBox.warning") as warning:
+            self.tab._run_compare()
+            warning.assert_called_once()
+        self.tab._focus_nodes = {"Receiver"}
+        self.tab.old_input.setText(str(self.new))
+        self.assertEqual(self.tab._focus_nodes, set())
+        self.assertIn("compared_new_vs_new.xlsx", self.tab.output_input.placeholderText())
+        self.assertEqual(self.tab.output_input.text(), str(gui_path))
+
+    def test_focus_selector_can_clear_and_show_node_side(self):
+        dialog = EcuFocusDialog(self.window, ["OldNode"], ["NewNode"], {"OldNode": "NewNode"}, {"OldNode"})
+        self.assertEqual(dialog.selected_nodes(), {"OldNode"})
+        self.assertIn("[NEW]", dialog.nodes.item(0).text())
+        self.assertEqual(dialog.nodes.item(1).checkState(), Qt.CheckState.Checked)
+        dialog._clear()
+        self.assertEqual(dialog.selected_nodes(), set())
+
+    def test_ecu_discovery_runs_in_worker_and_saves_selected_mapping(self):
+        self._files()
+        with patch(f"{_UI}.EcuPairingDialog") as dialog_type:
+            dialog_type.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialog_type.return_value.pair_map.return_value = {"OldNode": "NewNode"}
+            self.tab._open_ecu_pairing()
+            self.assertIsInstance(self.tab.ecu_worker, EcuDiscoveryWorker)
+            self.assertFalse(self.tab.run_button.isEnabled())
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+            self.assertEqual(dialog_type.call_args.args[1], ["OldNode", "Receiver", "Spare"])
+            self.assertEqual(dialog_type.call_args.args[2], ["NewNode", "Receiver", "Spare"])
+        self.assertEqual(self.tab._saved_ecu_map, {"OldNode": "NewNode"})
+        self.assertEqual(self.tab._saved_ecu_inputs, self.tab._current_inputs())
+
+    def test_ecu_pairing_stops_loading_before_modal_editor_opens(self):
+        original_exec = EcuPairingDialog.exec
+        old_folder, new_folder = self.root / "old", self.root / "new"
+        old_folder.mkdir()
+        new_folder.mkdir()
+        (old_folder / "bus.dbc").write_text(self.old.read_text(), encoding="utf-8")
+        (new_folder / "bus.dbc").write_text(self.new.read_text(), encoding="utf-8")
+        for mode in ("files", "folders"):
+            for save in (False, True):
+                with self.subTest(mode=mode, save=save):
+                    self._files()
+                    if mode == "folders":
+                        self.tab.input_mode.setCurrentIndex(0)
+                        self.tab.old_input.setText(str(old_folder))
+                        self.tab.new_input.setText(str(new_folder))
+                    self.tab.last_report = self.root / "previous.xlsx"
+                    self._save_maps()
+                    self.tab._saved_ecu_map = {}
+                    observed = []
+
+                    def inspect_editor(dialog):
+                        observed.append((
+                            self.tab.run_status.text(), self.tab.progress.maximum(),
+                            self.tab.progress.isHidden(), self.tab.run_button.isEnabled(),
+                            self.tab.old_input.isEnabled(),
+                        ))
+                        if save:
+                            row = next(
+                                row for row in range(dialog.table.rowCount())
+                                if dialog.table.item(row, 0).text() == "OldNode"
+                            )
+                            combo = dialog.table.cellWidget(row, 1)
+                            combo.setCurrentIndex(combo.findData("NewNode"))
+                        QTimer.singleShot(0, dialog._on_save if save else dialog.reject)
+                        return original_exec(dialog)
+
+                    with patch.object(EcuPairingDialog, "exec", inspect_editor):
+                        self.tab._open_ecu_pairing()
+                        self.assertEqual(self.tab.run_status.text(), "Loading ECU nodes…")
+                        self.assertEqual(self.tab.progress.maximum(), 0)
+                        self.assertFalse(self.tab.progress.isHidden())
+                        self._wait_until(lambda: self.tab.run_button.isEnabled())
+                    self.assertEqual(observed, [("Editing ECU pairing…", 1, True, False, False)])
+                    self.assertEqual(self.tab.run_status.text(), "Ready to compare")
+                    self.assertTrue(self.tab.progress.isHidden())
+                    self.assertTrue(self.tab.open_button.isEnabled())
+                    self.assertEqual(self.tab.manual_pair_button.isEnabled(), mode == "folders")
+                    self.assertEqual(
+                        self.tab._saved_ecu_map,
+                        {"OldNode": "NewNode"} if save else {},
+                    )
+
+    def test_bulk_rename_exports_correct_rows_through_gui(self):
+        from tests.test_bulk_rename import NEW_DBC, OLD_DBC, SUFFIXES
+
+        self.old.write_text(OLD_DBC, encoding="utf-8")
+        self.new.write_text(NEW_DBC, encoding="utf-8")
+        self._files()
+        report = self.root / "bulk.xlsx"
+        self.tab.output_input.setText(str(report))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.tab._run_compare()
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+        error.assert_not_called()
+        workbook = load_workbook(report)
+        self.addCleanup(workbook.close)
+        values = list(workbook["Signal Details"].values)
+        rows = [dict(zip(values[0], row)) for row in values[1:]]
+        self.assertEqual(len(rows), len(SUFFIXES))
+        self.assertTrue(all(row["DBC File"] == "old.dbc->new.dbc" and row["Change Type"] == "Renamed" for row in rows))
+        self.assertNotIn("Changed Properties", workbook.sheetnames)
+        self.assertTrue(all(row["Changed Properties"] is None for row in rows))
+
+    def test_gui_exports_multiple_property_changes_in_each_detail_sheet(self):
+        self._files()
+        old = _DBC.format(sender="OldNode")
+        self.old.write_text(old, encoding="utf-8")
+        self.new.write_text(old.replace('0|8@1+ (1,0)', '1|8@1+ (2,0)')
+                            + '\nCM_ BO_ 100 "Updated status";\n', encoding="utf-8")
+        report = self.root / "properties.xlsx"
+        self.tab.output_input.setText(str(report))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.tab._run_compare()
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+        error.assert_not_called()
+        self.tab.worker.wait(5000)
+        self.tab.export_worker.wait(5000)
+        workbook = load_workbook(report)
+        self.addCleanup(workbook.close)
+        self.assertEqual(workbook.sheetnames[:3], ["Summary", "Message Details", "Signal Details"])
+        self.assertNotIn("DBC Overview", workbook.sheetnames)
+        for name, expected in (
+            ("Message Details", "Description: ->Updated status"),
+            ("Signal Details", "Start Bit: 0->1; Factor: 1->2"),
+        ):
+            values = list(workbook[name].values)
+            self.assertEqual(len(values), 2)
+            row = dict(zip(values[0], values[1]))
+            self.assertEqual(row["Changed Properties"], expected)
+
+    def test_gui_exports_same_name_id_change_and_precise_values_without_overview(self):
+        self._files()
+        old = _DBC.format(sender="OldNode").replace("(1,0)", "(0.1234567,0)")
+        self.old.write_text(old, encoding="utf-8")
+        self.new.write_text(old.replace("BO_ 100 ", "BO_ 400 ").replace("0.1234567", "0.1234568"),
+                            encoding="utf-8")
+        report = self.root / "precise.xlsx"
+        self.tab.output_input.setText(str(report))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.tab._run_compare()
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+        error.assert_not_called()
+        workbook = load_workbook(report)
+        self.addCleanup(workbook.close)
+        for name, expected in (("Message Details", "CAN ID: 100->400"),
+                               ("Signal Details", "Factor: 0.1234567->0.1234568")):
+            values = list(workbook[name].values)
+            self.assertEqual(len(values), 2)
+            row = dict(zip(values[0], values[1]))
+            self.assertEqual(row["Change Type"], "Modified")
+            self.assertEqual(row["Changed Properties"], expected)
+        self.assertEqual(workbook.sheetnames[:3], ["Summary", "Message Details", "Signal Details"])
+        self.assertNotIn("DBC Overview", workbook.sheetnames)
+
+    def test_gui_folder_report_keeps_overview_for_one_pair(self):
+        old_folder, new_folder = self.root / "old", self.root / "new"
+        for folder in (old_folder, new_folder):
+            folder.mkdir()
+            (folder / "bus.dbc").write_text(_DBC.format(sender="OldNode"), encoding="utf-8")
+        self.tab.input_mode.setCurrentIndex(self.tab.input_mode.findData("folders"))
+        self.tab.old_input.setText(str(old_folder))
+        self.tab.new_input.setText(str(new_folder))
+        report = self.root / "folder.xlsx"
+        self.tab.output_input.setText(str(report))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.tab._run_compare()
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+        error.assert_not_called()
+        workbook = load_workbook(report)
+        self.addCleanup(workbook.close)
+        self.assertEqual(workbook.sheetnames, ["Summary", "DBC Overview", "Message Details", "Signal Details"])
+        self.assertEqual(workbook["DBC Overview"].max_row, 2)
+
+    def test_gui_rejects_duplicate_message_names_without_exporting(self):
+        self._files()
+        old = _DBC.format(sender="OldNode")
+        self.old.write_text(old + old.replace("BO_ 100 ", "BO_ 200 "), encoding="utf-8")
+        report = self.root / "duplicate.xlsx"
+        self.tab.output_input.setText(str(report))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.tab._run_compare()
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+        error.assert_called_once()
+        self.assertIn("Duplicate message name 'Status'", error.call_args.args[-1])
+        self.assertFalse(report.exists())
+
+    def test_shifted_signal_pairing_confidence_is_exported_by_gui(self):
+        from tests.test_signal_pairing import shifted_dbc
+
+        old_folder, new_folder = self.root / "old", self.root / "new"
+        old_folder.mkdir()
+        new_folder.mkdir()
+        for event_like in (False, True):
+            old, new, pairs = shifted_dbc(event_like)
+            self.old.write_text(old, encoding="utf-8")
+            self.new.write_text(new, encoding="utf-8")
+            (old_folder / "bus.dbc").write_text(old, encoding="utf-8")
+            (new_folder / "bus.dbc").write_text(new, encoding="utf-8")
+            for mode in ("files", "folders"):
+                with self.subTest(event_like=event_like, mode=mode):
+                    self._files()
+                    if mode == "folders":
+                        self.tab.input_mode.setCurrentIndex(0)
+                        self.tab.old_input.setText(str(old_folder))
+                        self.tab.new_input.setText(str(new_folder))
+                    report = self.root / "shifted.xlsx"
+                    self.tab.output_input.setText(str(report))
+                    with patch(f"{_UI}.QMessageBox.critical") as error:
+                        self.tab._run_compare()
+                        self._wait_until(lambda: self.tab.run_button.isEnabled())
+                    error.assert_not_called()
+                    self.tab.worker.wait(5000)
+                    self.tab.export_worker.wait(5000)
+                    workbook = load_workbook(report)
+                    try:
+                        values = list(workbook["Signal Details"].values)
+                        rows = [dict(zip(values[0], row)) for row in values[1:]]
+                        self.assertEqual({(row["Old Signal Name"], row["New Signal Name"]) for row in rows},
+                                         set(pairs.items()))
+                        self.assertTrue(all(row["Change Type"] == "Renamed" for row in rows))
+                        self.assertTrue(all(row["Confidence Level"] in {"Low", "Medium"} for row in rows))
+                        self.assertNotIn("Changed Properties", workbook.sheetnames)
+                        for row in rows:
+                            prop, value = row["Changed Properties"].split(": ")
+                            self.assertEqual(prop, "Start Bit")
+                            old_start, new_start = value.split("->")
+                            self.assertEqual(int(new_start) - int(old_start), 1)
+                    finally:
+                        workbook.close()
+
+    def test_ecu_parse_failure_restores_controls(self):
+        self._files()
+        self.new.write_text("invalid DBC", encoding="utf-8")
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.tab._open_ecu_pairing()
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+        error.assert_called_once()
+        self.assertTrue(self.tab.new_input.isEnabled())
+        self.assertFalse(self.tab.manual_pair_button.isEnabled())
+        self.assertEqual(self.tab.run_status.text(), "Ready to compare")
+        self.assertEqual(self.tab.progress.maximum(), 1)
+        self.assertTrue(self.tab.progress.isHidden())
+
+    def test_stale_ecu_discovery_restores_idle_state_without_opening_editor(self):
+        self._files()
+        with patch(f"{_UI}.EcuDiscoveryWorker.start"):
+            self.tab._open_ecu_pairing()
+        self.tab.new_input.setText(str(self.old))
+        with patch(f"{_UI}.EcuPairingDialog") as dialog_type:
+            self.tab._on_ecu_nodes_loaded(["OldNode"], ["NewNode"])
+        dialog_type.assert_not_called()
+        self.assertEqual(self.tab.run_status.text(), "Ready to compare")
+        self.assertTrue(self.tab.progress.isHidden())
+        self.assertTrue(self.tab.run_button.isEnabled())
+
+    def test_manual_pairing_editor_restores_previous_status_after_save_or_cancel(self):
+        self.tab.old_input.setText(str(self.root))
+        self.tab.new_input.setText(str(self.root))
+        for result in (QDialog.DialogCode.Accepted, QDialog.DialogCode.Rejected):
+            with self.subTest(result=result):
+                self.tab.run_status.setText("Report ready · 5 changes")
+
+                def inspect_editor():
+                    self.assertEqual(self.tab.run_status.text(), "Editing DBC pairing…")
+                    self.assertTrue(self.tab.progress.isHidden())
+                    return result
+
+                with patch(f"{_UI}.ManualPairingDialog") as dialog_type:
+                    dialog_type.return_value.exec.side_effect = inspect_editor
+                    dialog_type.return_value.pair_map.return_value = {"old.dbc": "new.dbc"}
+                    self.assertEqual(
+                        self.tab._open_manual_pairing(), result == QDialog.DialogCode.Accepted
+                    )
+                self.assertEqual(self.tab.run_status.text(), "Report ready · 5 changes")
+
+    def test_manual_folder_worker_keeps_ecu_map_and_original_names(self):
+        old_folder, new_folder = self.root / "old", self.root / "new"
+        old_folder.mkdir()
+        new_folder.mkdir()
+        (old_folder / "legacy.dbc").write_text(self.old.read_text(), encoding="utf-8")
+        (new_folder / "current.dbc").write_text(self.new.read_text(), encoding="utf-8")
+        worker = CompareWorker(
+            old_folder, new_folder, {"legacy.dbc": "current.dbc"},
+            include_unchanged=True, ecu_map={"OldNode": "NewNode"},
+        )
+        results, errors = [], []
+        worker.compared.connect(results.append)
+        worker.failed.connect(errors.append)
+        worker.run()
+        self.assertEqual(errors, [])
+        self.assertEqual(results[0].summary()["Total Changes"], 0)
+        self.assertEqual(results[0].message_changes[0].old_message.transmitter, "OldNode")
+        self.assertEqual(results[0].message_changes[0].new_message.transmitter, "NewNode")
+
+    def test_ecu_dialog_saves_one_or_two_pairs_with_other_nodes_kept(self):
+        for mapping in ({"A": "B"}, {"A": "B", "C": "D"}):
+            with self.subTest(mapping=mapping):
+                nodes = ["A", "B", "C", "D", "E"]
+                dialog = EcuPairingDialog(self.window, nodes, ["B", "C", "D", "E"])
+                for row, node in enumerate(nodes):
+                    if node in mapping:
+                        combo = dialog.table.cellWidget(row, 1)
+                        combo.setCurrentIndex(combo.findData(mapping[node]))
+                with patch(f"{_UI}.QMessageBox.warning") as warning:
+                    dialog._on_save()
+                warning.assert_not_called()
+                self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+                self.assertEqual(dialog.pair_map(), mapping)
+                restored = EcuPairingDialog(self.window, nodes, ["B", "C", "D", "E"], previous=dialog.pair_map())
+                for row, node in enumerate(nodes):
+                    self.assertEqual(restored.table.cellWidget(row, 1).currentData(), mapping.get(node))
+                restored.deleteLater()
+                dialog.deleteLater()
+
+    def test_ecu_dialog_rejects_duplicate_selected_rename_targets(self):
+        for target in ("C", "D"):
+            with self.subTest(target=target):
+                dialog = EcuPairingDialog(self.window, ["A", "B"], ["C", "D"])
+                first = dialog.table.cellWidget(0, 1)
+                first.setCurrentIndex(first.findData(target))
+                second = dialog.table.cellWidget(1, 1)
+                second.setCurrentIndex(second.findData(target))
+                with patch(f"{_UI}.QMessageBox.warning") as warning:
+                    dialog._on_save()
+                warning.assert_called_once()
+                self.assertNotEqual(dialog.result(), QDialog.DialogCode.Accepted)
+                dialog.deleteLater()
+
+    def test_partial_ecu_pairing_saves_and_exports_through_gui(self):
+        self.old.write_text(_DBC.format(sender="OldNode").replace("Receiver Spare", "Receiver Spare NewNode"), encoding="utf-8")
+        self._files()
+        self.tab.chk_include_unchanged.setChecked(True)
+        report = self.root / "partial.xlsx"
+        self.tab.output_input.setText(str(report))
+        original_exec = EcuPairingDialog.exec
+
+        def save_partial(dialog):
+            row = next(row for row in range(dialog.table.rowCount()) if dialog.table.item(row, 0).text() == "OldNode")
+            combo = dialog.table.cellWidget(row, 1)
+            combo.setCurrentIndex(combo.findData("NewNode"))
+            QTimer.singleShot(0, dialog._on_save)
+            return original_exec(dialog)
+
+        with patch.object(EcuPairingDialog, "exec", save_partial), patch(f"{_UI}.QMessageBox.warning") as warning:
+            self.tab._open_ecu_pairing()
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+        warning.assert_not_called()
+        self.assertEqual(self.tab._saved_ecu_map, {"OldNode": "NewNode"})
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.tab._run_compare()
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+        error.assert_not_called()
+        self.assertEqual(self.tab.worker.ecu_map, {"OldNode": "NewNode"})
+        self.assertEqual(self.tab.last_report, report)
+        self.assertTrue(report.is_file())
+        self.assertIn("0 changes", self.tab.run_status.text())
+        with report.open("rb") as stream:
+            workbook = load_workbook(stream)
+            try:
+                for name in ("Message Details", "Signal Details"):
+                    values = list(workbook[name].values)
+                    row = dict(zip(values[0], values[1]))
+                    self.assertEqual(row["ECU Node Tx"], "OldNode->NewNode")
+                    self.assertEqual(row["ECU Node Rx"], "Receiver")
+                    self.assertEqual(row["CAN ID"], "0x64")
+                    self.assertEqual(row["Change Type"], "Unchanged")
+            finally:
+                workbook.close()
+
+    def test_ecu_dialog_supports_swaps_and_clearing_saved_mapping(self):
+        dialog = EcuPairingDialog(
+            self.window, ["A", "B"], ["A", "B"], previous={"A": "B", "B": "A"}
+        )
+        dialog._on_save()
+        self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+        self.assertEqual(dialog.pair_map(), {"A": "B", "B": "A"})
+        for row in range(2):
+            dialog.table.cellWidget(row, 1).setCurrentIndex(0)
+        dialog._on_save()
+        self.assertEqual(dialog.pair_map(), {})
+        dialog.deleteLater()
+
+    def test_manual_dialog_still_rejects_duplicate_file_pairing(self):
+        folder = self.root / "old"
+        folder.mkdir()
+        for name in ("one.dbc", "two.dbc"):
+            (folder / name).write_text(self.old.read_text(), encoding="utf-8")
+        dialog = ManualPairingDialog(self.window, folder, folder)
+        dialog.table.cellWidget(0, 1).setCurrentIndex(1)
+        dialog.table.cellWidget(1, 1).setCurrentIndex(1)
+        with patch(f"{_UI}.QMessageBox.warning") as warning:
+            dialog._on_save()
+        warning.assert_called_once()
+        self.assertNotEqual(dialog.result(), QDialog.DialogCode.Accepted)
+        dialog.deleteLater()
+
+    def test_same_corpus_matches_api_pipeline_and_gui_metadata_after_excel_roundtrip(self):
+        from dbc_compare_tool.dbc_compare.core.comparator import DbcComparator
+        from dbc_compare_tool.dbc_compare.pipeline import run_comparison
+        from dbc_compare_tool.dbc_compare.report.excel import write_excel_report
+        from tests.test_signal_pairing import shifted_dbc
+
+        old_text, new_text, _ = shifted_dbc(False)
+        for side, text in (("old", old_text), ("new", new_text)):
+            path = self.root / side / "bus.dbc"
+            path.parent.mkdir()
+            path.write_text(text, encoding="utf-8")
+        # Include a parse error on each side, testing completion metadata as well.
+        for side in ("old", "new"):
+            (self.root / side / "broken.dbc").write_text("invalid dbc", encoding="utf-8")
+        old, new = self.root / "old", self.root / "new"
+        result = DbcComparator().compare_folders(old, new)
+        api_path = write_excel_report(result, self.root / "api.xlsx")
+        pipeline_result, pipeline_path = run_comparison(old, new, self.root / "pipeline.xlsx")
+        self.assertEqual(pipeline_result.completeness, "Incomplete")
+        self.tab.old_input.setText(str(old))
+        self.tab.new_input.setText(str(new))
+        self.tab.input_mode.setCurrentIndex(0)
+        gui_path = self.root / "gui.xlsx"
+        self.tab.output_input.setText(str(gui_path))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.tab._run_compare()
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+        error.assert_not_called()
+        self.assertIn("Report incomplete", self.tab.run_status.text())
+        self.assertIn("2 file errors", self.tab.run_status.text())
+        def contents(path):
+            wb = load_workbook(path)
+            try:
+                return {name: list(wb[name].values)[2 if name == "Summary" else 0:]
+                        for name in wb.sheetnames}
+            finally:
+                wb.close()
+        self.assertEqual(contents(api_path), contents(pipeline_path))
+        self.assertEqual(contents(api_path), contents(gui_path))
+
+    def test_removed_manual_mapping_exports_without_auto_override(self):
+        old, new = self.root / "old", self.root / "new"
+        old.mkdir()
+        new.mkdir()
+        (old / "bus.dbc").write_text(_DBC.format(sender="OldNode"), encoding="utf-8")
+        (new / "bus.dbc").write_text(_DBC.format(sender="OldNode"), encoding="utf-8")
+        self.tab.old_input.setText(str(old))
+        self.tab.new_input.setText(str(new))
+        self.tab._saved_pair_map = {"bus.dbc": None}
+        self.tab._saved_pair_folders = self.tab._current_folder_inputs()
+        report = self.root / "manual-removed.xlsx"
+        self.tab.output_input.setText(str(report))
+        with patch(f"{_UI}.QMessageBox.critical") as error:
+            self.tab._run_compare()
+            self._wait_until(lambda: self.tab.run_button.isEnabled())
+        error.assert_not_called()
+        self.assertEqual(self.tab.worker.pair_map, {"bus.dbc": None})
+        wb = load_workbook(report)
+        try:
+            rows = list(wb["Message Details"].values)
+            index = rows[0].index("Change Type")
+            self.assertEqual({r[index] for r in rows[1:]}, {"Added", "Removed"})
+        finally:
+            wb.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

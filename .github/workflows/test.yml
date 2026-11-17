@@ -1,0 +1,54 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  engine:
+    # The comparison engine and its Excel report must work without any GUI
+    # framework, so this job installs everything except PySide6 and skips the
+    # Qt tests.
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install engine dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "cantools>=40.3.0,<42" "openpyxl>=3.1,<4" "pytest>=8,<10"
+          python -m pip install -e . --no-deps
+      - name: Run engine tests
+        run: python -m pytest -q -m "not gui"
+      - name: Run the engine smoke test
+        run: python scripts/smoke.py
+
+  app:
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install the app with test tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Lint
+        run: python -m ruff check .
+      - name: Run all tests, including the Qt widgets
+        run: python -m pytest -q
+      - name: Run the engine and window smoke test
+        run: python scripts/smoke.py --gui

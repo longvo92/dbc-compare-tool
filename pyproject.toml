@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dbc-compare-tool"
+version = "1.0.0"
+description = "Desktop app that compares two DBC baselines into an Excel change report"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Long Vo Thien" }]
+keywords = ["dbc", "can", "can-bus", "automotive", "cantools", "diff", "baseline", "excel", "report"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Win32 (MS Windows)",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Embedded Systems",
+]
+dependencies = [
+    "PySide6>=6.7.0",
+    "cantools>=40.3.0,<42",
+    "openpyxl>=3.1,<4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.15,<0.18", "pyinstaller>=6.0.0"]
+
+[project.urls]
+Homepage = "https://github.com/longvo92/dbc-compare-tool"
+Issues = "https://github.com/longvo92/dbc-compare-tool/issues"
+Changelog = "https://github.com/longvo92/dbc-compare-tool/blob/main/CHANGELOG.md"
+
+[project.gui-scripts]
+dbc-compare-tool = "dbc_compare_tool.ui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+markers = ["gui: drives Qt widgets (needs PySide6 and a Qt platform plugin)"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

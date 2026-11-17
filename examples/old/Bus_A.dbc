@@ -1,0 +1,19 @@
+VERSION ""
+
+BO_ 100 BCM_Status: 8 BCM
+ SG_ VehicleSpeed : 0|16@1+ (0.01,0) [0|250] "km/h" ECM,IC
+ SG_ IgnitionState : 16|2@1+ (1,0) [0|3] "" ECM
+BO_ 200 EventMatrix_Old: 8 ECU
+ SG_ Event_Door_Open : 0|1@1+ (1,0) [0|1] "" Gateway
+ SG_ Event_Door_Close : 1|1@1+ (1,0) [0|1] "" Gateway
+ SG_ Event_Window_Open : 2|1@1+ (1,0) [0|1] "" Gateway
+ SG_ Event_Window_Close : 3|1@1+ (1,0) [0|1] "" Gateway
+ SG_ Event_Trunk_Open : 4|1@1+ (1,0) [0|1] "" Gateway
+ SG_ Event_Trunk_Close : 5|1@1+ (1,0) [0|1] "" Gateway
+ SG_ Event_Lock_Status : 6|1@1+ (1,0) [0|1] "" Gateway
+ SG_ Event_Alarm_Active : 7|1@1+ (1,0) [0|1] "" Gateway
+BO_ 300 Engine_Status: 8 ECU
+ SG_ EngineRPM : 0|16@1+ (0.25,0) [0|8000] "rpm" ECM
+ SG_ EngineTemp : 16|8@1+ (1,-40) [-40|215] "C" ECM
+BA_ "GenMsgCycleTime" BO_ 100 10;
+
